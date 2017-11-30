@@ -1,6 +1,6 @@
 %report.tex
 % the glue for everything else
-\documentstyle[a4, twocolumn]{report}
+\documentclass[9pt,technote]{IEEEtran}
 %\documentstyle{report}
 \renewcommand{\baselinestretch}{1.5}
 \begin{document}
@@ -25,23 +25,52 @@ We introduce two variants committers which can be used to write data directly to
 
 It has long been a core requirement of ``Big Data'' computation platforms that the source and destination of data was a fully consistent distributed filesystem, albeit often ``sub-Posix''.
 
-\begin{quote}
-We rely on the atomic rename operation provided by the underlying file system to guarantee that the final file system state contains just the data produced by one execution of the reduce task.
-\end{quote}
-\cite{Dean:2004:MSD:1251254.1251264}
 
 A distributed filesystem, because data needs to be visible to all processes executing a query spanning multiple machines in a cluster of computers. 
 
 ``Sub-Posix'', in that the full semantics of the POSIX filesystem APIs were not always necessary. A commonly dropped requirement is the ability to seek past the end of the file and write data, with a secondary dropped behavior one of being able to overwrite existing data within a file. That is: new data could only be written at the current end of the file. 
 
-What has been a consistent part of the required semantics has been that the filesystem presents a model of directories and files with consistent operations to list and read those directories, and at least two atomic operations: 
+What has been a consistent part of the required semantics has been that the filesystem presents a model of directories and files with consistent operations to list and read those directories, and at least four atomic operations: 
 \begin{itemize}
-  \item{}
+  \item{rename of a single file to another location within the same volume}
+  \item{rename of a directory and its contents to another location within the same volume}
+  \item{create file with no overwrite}
+  \item{recursive delete of a directory}
 \end{itemize}
+
+These operations are often used as the base operations of higher-level co-ordination and commit protocols. For example, the create operation can be used to obtain a lock on a resource: the first process to create a file can consider itself having exclusive access to it, and so implicitly consider itself to have acquire a resource. The \texttt{rename()} operation is generally critical to providing atomic promotion of output: a single \texttt{rename()} call can promote all in-progress output of a worker to become completed work, simply by moving all the output to a well known path. And, when the job completes, its final output may be renamed to a new location to become publicly visible.
+
+
+\begin{quote}
+We rely on the atomic rename operation provided by the underlying file system to guarantee that the final file system state contains just the data produced by one execution of the reduce task.
+\end{quote}
+\cite{Dean:2004:MSD:1251254.1251264}
+
+Object stores do not generally offer the full semantics of a filesystem. Generally the set of operations available are an extended set of HTTP verbs
+
+\begin{itemize}
+  \item{\texttt{PUT path, data}: write an object, with the output only becoming visible when the call successfully completes.}
+  \item{\texttt{GET path}}
+  \item{\texttt{HEAD path}}
+  \item{\texttt{LIST path}}
+  \item{\texttt{COPY path, newpath} copy a single object within the store, completion time a function size/bandwidth}
+  \item{\texttt{DELETE path}  + a bulk delete call which may have partial failures}
+  \item{optionally: a way to PUT an object larger than 5GB through a series of PUT/POST operations and a final PUT/POST to complete the sequence.}
+\end{itemize}
+
+\section{Limitations}
+
+A key criticism of the new algorithm is that the job commit operation is not atomic; it is \emph{O(files)} operation which may fail partway through. We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit, 
+
+An unrelated problem, but one which may manifest itself in cloud-based deployments, is that the higher-level commit protocol assumes that time increases monotonically on individual machines in the cluster. The job manager and workers can use the interval between the last successful hearbeat and the current time as the means by which they can consider themselves to have lost contact with each other and system services. In cloud environments clocks may stutter, proceed at significatly different rates, and indeed, may even proceed backwards \cite{anything?}. 
+
+We offer no solution to this, except to question whether virtualized clocks can be considered a reliable source of \emph{time}, and ask: what can be used instead? Given that all processes are working with a shared object store, it may be simplest to use this as an approximate source of time, at least to the extent of using its timestamps as a normative source of increasing time values which can be consistently viewed across all workers. Yet that itself is a dangerous assumption to make. 
 
 \section{Related Work}
 
-Apache spark (briefly) offered a zero rename committer, the \emph{Direct Output Committer}. With this committer, output was written directly to the destination directory; both task and job commit operations were reduced to no-ops. To avoid concurrency issues, speculative execution of tasks was automatically disabled when this committer was used. Unfortunately, the committer was still not resilient to failure: a failed task could not be repeated, as its output was unknown. For this reason it was discontinued. It's loss is still noted by users, showing how a much 0-rename committer was valued by users, even if it failed to offer any of the actual semantics of a commit protocol.
+Apache spark (briefly) offered a zero rename committer, the \emph{Direct Output Committer}\cite{JIRA}. With this committer, output was written directly to the destination directory; both task and job commit operations were reduced to no-ops. To avoid concurrency issues, speculative execution of tasks was automatically disabled when this committer was used. Unfortunately, the committer was still not resilient to failure: a failed task could not be repeated, as its output was unknown. For this reason it was discontinued \cite{DOC-JIRA}. It's absence is now noted by users, showing how a much 0-rename committer was valued by users, even if it failed to offer any of the actual semantics of a commit protocol. Alternatively: performance is observable, whereas consistency and failures are not considered important until they surface in production systems.
 
-IBM stocator eliminates renames by also having a direct write to the destination  \cite{DBLP:journals/corr/abs-1709-01812}. As with the \emph{the Magic Committer}, it modifies the semantics of write operations into the temporary directories of work, here the \texttt{_temporary} path used by the classic \texttt{FileOutputCommitter}.
-To avoid the failure semantics of Spark's \emph{Direct Output Committer}, every remapped file was given a name which added the job and task attempt IDs, while still preserving the sort order. As a result, failed and aborted tasks and jobs could be cleaned up by their successors. Stocator also generated a JSON-formatted \texttt{_SUCCESS} file, which offered the ability to obtain a consistent list of the final files committed by a job, even in the presence of listing inconsistency. With this design, Stocator does make the output of work immediately visible; again there is no task commit, and the job commit is a matter of writing the \texttt{_SUCCESS} file. This is achieved by misleading the classic committer, which believes that it is writing files to a temporary destination and renamining them. The closest of the two S3A committers is the magic committer. It too writes the output to a different destination than the location passed to the \texttt{FileOutputFormat} instance writing data. However, the data is not actually manifest until the final job is committed: there is no observable change to the destination directory until the job commit. Thus it provides the standard semantics of task and job commmit: no data is visible until the job is committed.
+IBM stocator eliminates renames by also having a direct write to the destination  \cite{DBLP:journals/corr/abs-1709-01812}. As with the \emph{the Magic Committer}, it modifies the semantics of write operations into the temporary directories of work, here the \texttt{\_temporary} path used by the classic \texttt{FileOutputCommitter}.
+To avoid the failure semantics of Spark's \emph{Direct Output Committer}, every remapped file was given a name which added the job and task attempt IDs, while still preserving the sort order. As a result, failed and aborted tasks and jobs could be cleaned up by their successors. Stocator also generated a JSON-formatted \texttt{\_SUCCESS} file, which offered the ability to obtain a consistent list of the final files committed by a job, even in the presence of listing inconsistency. With this design, Stocator does make the output of work immediately visible; again there is no task commit, and the job commit is a matter of writing the \texttt{\_SUCCESS} file. This is achieved by misleading the classic committer, which believes that it is writing files to a temporary destination and renamining them. The closest of the two S3A committers is the magic committer. It too writes the output to a different destination than the location passed to the \texttt{FileOutputFormat} instance writing data. However, the data is not actually manifest until the final job is committed: there is no observable change to the destination directory until the job commit. Thus it provides the standard semantics of task and job commmit: no data is visible until the job is committed.
+
+\end{document}
