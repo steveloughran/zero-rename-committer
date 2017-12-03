@@ -23,6 +23,9 @@
   <description>Maven to build the PDF/DVIs of the project</description>
   <name>S3A Committers</name>
   <packaging>jar</packaging>
+  <properties>
+      <biblio.dir>../formality/papers/bibliography</biblio.dir>
+  </properties>
   <pluginRepositories>
     <pluginRepository>
       <id>maven-latex-plugin-repo</id>

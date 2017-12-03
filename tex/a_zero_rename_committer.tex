@@ -78,8 +78,19 @@ Thus it is neither fast nor reliable.
 
 Apache Hadoop was written with its own filesystem, Hadoop Distributed File System (HDFS).
 
+It is self-admittedly "sub-POSIX", specifically, while presenting the POSIX
+model of a filesystem tree containing directories and files, data can only be
+appended directly to the end of the current file.
+That is: one my not \texttt{seek()} to before or after the end of the file and
+then write data.
 
+It does offer atomic operations which are used in commit protocols and other
+applications as a means of enforcing exclusivity; so permitting the filesystem
+to act as a mechanism of co-ordinating access across machines.
 
+% As all filesystem
+%operations are via the NameNode, all clients get a consistent view of the filesystem.
+%And, as the
 
 
 
@@ -128,9 +139,10 @@ Thus it provides the standard semantics of task and job commmit: no data is visi
 
 \section{References}
 
-Bibliography. Include
+% Bibliography. Include
+% Expects the formality project to be alongside this one.
 
-\bibliography{bibliography}
+\bibliography{./formality/papers/bibliography/bibliography}
 
 S3Guard
 S3mper
