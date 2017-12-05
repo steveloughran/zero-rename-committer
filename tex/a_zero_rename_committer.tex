@@ -1,20 +1,34 @@
-%report.tex
-% the glue for everything else
+% a_zer_rename_committer.tex
 \documentclass[9pt,technote]{IEEEtran}
-%\documentstyle{report}
-\renewcommand{\baselinestretch}{1.5}
-\begin{document}
-\parindent 0pt
-\setlength{\parskip}{3ex}
-
-
+\usepackage{babel}
 
 \title{Zero-rename output committers for working with object storesApache Hadoop and Spark for object storage}
-\author{Steve Loughran}
+\author{
+  Loughran, Steve\\
+  \texttt{stevel@hortonworks.com}
+\and
+  Blue, Ryan\\
+  \texttt{rblue@netflix.com}
+
+}
+
+%
+%\author{Sanjay Radia, Hortonworks}
+%\author{Rajesh Balamohan, Hortonworks}
+%
+\date{December 2017}
+
+\begin{document}
+%\parindent 0pt
+%\setlength{\parskip}{3ex}
+
+
+
+
 \maketitle
 
 
-\section{Abstract}
+\begin{abstract}
 
 We introduce new \emph{committers} for Apache Hadoop, so permitting
 the Amazon S3 Object Store to be used as a direct destination of output generated
@@ -27,126 +41,379 @@ overall job is committed.
 As a result, the committers meet the core requirement of the Hadoop and Spark commit
 protocols: output is not visible until committed, while being highly-performant.
 
-We also define the commit protocols of Hadoop and Spark, and show how the classic committer implementation's requirements of atomic file creation and rename operations mean that they cannot be safely used with Amazon S3.
-Thus the new committers are less ``better'' committers for object stores, but rather ``safe for use''.
+We also define the commit protocols of Hadoop and Spark, and show how the classic committer
+implementation's requirements of atomic file creation and rename operations mean that they
+cannot be safely used with Amazon S3.
+hus the new committers are not just ``better'' committers for object stores,
+but fundamentally safe for use.
 
 We discuss the two committers, ``Staging'' and ``Magic'', exploring their differences.
-The Staging committer stages all generated output to the local filesystem of  worker nodes, uploading this data when a task is committed.
-The Magic committer streams data directly to the object store, relying on the object store client to recognise some output paths as special (``magic''), and so translating writes to these paths as initiating a delayed-completion write to a calculated final destination.
+The Staging committer stages all generated output to the local filesystem of
+worker nodes, uploading this data when a task is committed.
+The Magic committer streams data directly to the object store, relying on the
+object store client to recognise some output paths as special (``magic''), and
+so translating writes to these paths as initiating a delayed-completion write to a calculated final destination.
 
+\end{abstract}
 
 
 \section{Introduction}
-It has long been a core requirement of ``Big Data'' computation platforms that the source and destination of data was a fully consistent distributed filesystem, albeit often ``sub-Posix''.
-A distributed filesystem, because data needs to be visible to all processes executing a query spanning multiple machines in a cluster of computers.
-``Sub-Posix'', in that the full semantics of the POSIX filesystem APIs were not always necessary.
-A commonly dropped requirement is the ability to seek past the end of the file and write data, with a secondary dropped behavior one of being able to overwrite existing data within a file.
+\label{sec:introduction}
+
+It has long been a core requirement of ``Big Data'' computation platforms that
+the source and destination of data was a fully consistent distributed filesystem,
+albeit often ``sub-POSIX''.
+
+Distributed, because data needs to be readable and writeable by all processes
+executing a query across the cluster of computers.
+``Sub-POSIX'', in that the full semantics of the POSIX filesystem APIs were not always necessary.
+A commonly dropped requirement is the ability to seek past the end of the file and
+write data, with a secondary dropped behavior one of being able to overwrite existing
+data within a file.
 That is: new data could only be written at the current end of the file.
-What has been a consistent part of the required semantics has been that the filesystem presents a model of directories and files with consistent operations to list and read those directories, and at least four atomic operations:
+What has been a consistent part of the required semantics has been that the filesystem
+presents a model of directories and files with consistent operations to list and
+read those directories, and at least four atomic operations:
+
 \begin{itemize}
-  \item{rename of a single file to another location within the same volume}
-  \item{rename of a directory and its contents to another location within the same volume}
-  \item{create file with no overwrite}
-  \item{recursive delete of a directory}
+  \item rename of a single file to another location within the same volume 
+  \item rename of a directory and its contents to another location within the same volume 
+  \item create file with no overwrite 
+  \item recursive delete of a directory 
 \end{itemize}
-These operations are often used as the base operations of higher-level co-ordination and commit protocols.
-For example, the create operation can be used to obtain a lock on a resource: the first process to create a file can consider itself having exclusive access to it, and so implicitly consider itself to have acquire a resource.
-The \texttt{rename()} operation is generally critical to providing atomic promotion of output: a single \texttt{rename()} call can promote all in-progress output of a worker to become completed work, simply by moving all the output to a well known path.
-And, when the job completes, its final output may be renamed to a new location to become publicly visible.
+
+These operations are often used as the foundational operators of higher-level
+co-ordination and commit protocols.
+
+For example, the create() operation can be used to obtain a lock on a resource:
+the first process to create a file can consider itself having exclusive access to it,
+and so implicitly consider itself to have acquired the resource.
+
+The \texttt{rename()} operation is generally critical to providing atomic promotion
+of output: a single \texttt{rename()} call can promote all in-progress output
+of a worker to become completed work, simply by moving all the output to a well known path.
+And, when the job completes, its final output may be renamed to a new location to become
+publicly visible.
+
+As covered in\ \cite{Dean:2004:MSD:1251254.1251264}:
+
 \begin{quote}
-  We rely on the atomic rename operation provided by the underlying file system to guarantee that the final file system state contains just the data produced by one execution of the reduce task.
+We rely on the atomic rename operation provided by the underlying file system
+to guarantee that the final file system state contains just the data produced
+by one execution of the reduce task.
 \end{quote}
-\cite{Dean:2004:MSD:1251254.1251264}
 
-Object stores do not generally offer the full semantics of a filesystem. Generally the set of operations available are an extended set of HTTP verbs
-\begin{itemize}
-  \item{\texttt{PUT path, data}: write an object, with the output only becoming visible when the call successfully completes.}
-  \item{\texttt{GET path}}
-  \item{\texttt{HEAD path}}
-  \item{\texttt{LIST path}}
-  \item{\texttt{COPY path, newpath} copy a single object within the store, completion time a function size/bandwidth}
-  \item{\texttt{DELETE path}  + a bulk delete call which may have partial failures}
-  \item{optionally: a way to PUT an object larger than 5GB through a series of PUT/POST operations and a final PUT/POST to complete the sequence.}
-\end{itemize}
-
-Object stores which lack an atomic O(1) \texttt{rename()} operation cannot be safely used as the direct destination of work from Apache Hadoop MapReduce or Apache Spark, due to the existing ``Committer''s dependency upon rename for atomic commit operations.
-If the object store is eventually consistent, then even mimicing the rename() operation is at risk of losing data.
-Thus it is neither fast nor reliable.
-
-
-\section{Hadoop and object stores}
 
 Apache Hadoop was written with its own filesystem, Hadoop Distributed File System (HDFS).
 
-It is self-admittedly "sub-POSIX", specifically, while presenting the POSIX
+It is self-admittedly ``sub-POSIX'', specifically, while presenting the POSIX
 model of a filesystem tree containing directories and files, data can only be
 appended directly to the end of the current file.
 That is: one my not \texttt{seek()} to before or after the end of the file and
 then write data.
 
 It does offer atomic operations which are used in commit protocols and other
-applications as a means of enforcing exclusivity; so permitting the filesystem
-to act as a mechanism of co-ordinating access across machines.
+applications as a means of enforcing exclusivity;
+so permitting the filesystem to act as a mechanism of co-ordinating access across machines.
+
+\section{The Hadoop MapReduce Commit Algorithm}
+\label{sec:mr}
+
+
+Apache Hadoop's MapReduce implementation is designed to support long-lived
+large-scale queries taking minutes to hours to complete.
+Its requirements include the following:
+
+\begin{enumerate}
+
+\item Support thousands to tens of thousands of invidually scheduled $tasks$
+within a single $job$.
+
+\item Support different destinations of work, such as filesystems and databases.
+
+\item Recover from the failure of a task by rescheduling the task;
+it may be executed anywhere within the cluster.
+
+\item Support speculative execution of work as a means of compensating for the
+delay caused by \emph{stragglers} in the execution.
+
+\item Potentially: recover from a failure of the entire job, using all the work
+already completed by the first, failed job.
+
+\item Be resilient to network failures/partitions of tasks, and of the job manager
+itself becoming isolated from other parts of the system (and hence: a second
+attempt at the job being started).
+
+\end{enumerate}
+
+
+
+This leads to some specific requirements of the implementation, requirements
+which can be used to assess the correctness of the implementation.
+
+\textbf{Independent.}
+Individual tasks must be able to write their data without directly
+co-ordinating that write with those of other tasks.
+
+\textbf{Speculative tasks until committed.}
+Multiple tasks must be able to simultaneously execute on the same input
+source, to generate the required output of that part of the input.
+This is required for recovery, and for speculation.
+Non requirement: idempotent output;
+that is left to the implementors of the operations executed in the tasks.
+
+\textbf{Scaleable communication protocol.}
+The commit protocol communications between task and job manager
+must be efficient enough to support tens of thousands of simultaneous
+tasks.
+
+\textbf{Abortable Job.}
+It must be possible to abort an uncommitted task or job.
+
+\textbf{Recoverable or Restartable Job.}
+A committer can declare whether or not it supports job recovery;
+if it does, it must implement recovery.
+If not, the job must be restartable from the beginning.
+
+The longer a job takes to execute, the higher the probability that the (single)
+job manager will fail, and hence the more valuable the ability to recover from
+a job failure is.
+Jobs which take a few minutes are generally so inexpensive to
+restart that focusing on execution time over recoverability is a better strategy.
+For this reason, Hadoop MapReduce implements two algorithms
+
+
+\textbf{V1.}
+Task commit promotes work to a job attempt directory;
+job commit promotes this to the destination.
+A restarted job can enumerate all work (atomically)
+committed by tasks and re-use this output.
+
+\textbf{V2.}
+Tasks commit their output direct to the destination directory.
+A restarted job must delete the contents of this directory and reexecute
+the entire job.
+
+\begin{table}
+  \label{tab:file-committer-attributes}
+  \begin{tabular}{ l c c }
+    \hline
+    & \textbf{v1} & \textbf{v2} \\
+    Independent & True & True \\
+    Speculative Tasks & True & True \\
+    Recoverable Job & True & False \\
+    Abortable Job & True & Delete output directory \\
+    Observable & False & True \\
+    Atomic Task Commit & True & False \\
+    Idempotent Task Commit & True & False \\
+    Atomic Job Commit & False & True \\
+    Idempotent Job Commit & False & True \\
+    \hline
+  \end{tabular}
+  \caption{Attributes of the MapReduce File committer algorithms}
+\end{table}
+
+
+\section{Hadoop and object stores}
+\label{sec:object-stores}
+
+
 
 % As all filesystem
 %operations are via the NameNode, all clients get a consistent view of the filesystem.
 %And, as the
 
 
+Object stores do not generally offer the full semantics of a filesystem.
+Generally the set of operations available are an extended set of HTTP verbs:
+
+\begin{description}
+  \item[PUT] Atomic write of an object
+  \item[GET] retrieve all or part of an object
+  \item[HEAD] retrieve the object metadata
+  \item[LIST] list all objects starting with a given prefix
+  \item[COPY] copy a single object within the store
+  \item[DELETE] Delete an object
+\end{description}
+
+There are usually two extra operations to address scale:
+ a bulk delete call which may have partial failures,
+and \emph{Multipart Upload}; a way to upload an object larger than 5GB\@.
+The exact nature of multipart uploads varies from store to store.
+For Amazon this is initiated as a sequence of POST calls, one to initiate,
+one or more POST calls with data, and a final POST listing the (ordered)
+etags of the uploaded object parts.
+All but the last upload in the object must be 5 MB or larger
+
+
+Object stores which lack an atomic $O(1)$ \texttt{rename()} operation cannot
+be safely used as the direct destination of work from Apache Hadoop MapReduce
+or Apache Spark, due to the existing ``Committer''s dependency upon rename for
+atomic commit operations.
+If the object store is eventually consistent, then even mimicing the \texttt{rename()}
+operation is at risk of losing data.
+Thus it is neither fast nor reliable.
 
 
 \section{Limitations}
+\label{sec:limitations}
 
 A key criticism of the new algorithm is that the job commit operation is not atomic;
-it is \emph{O(files)} operation which may fail partway through. We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit,
+it is $O(files)$ operation which may fail partway through.
+We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit;
+the job manager commit algorithm is designed to detect failures in job commits
+of previous attempts, and either recover or fail, according to the actions
+offered by the committer
 
-An unrelated problem, but one which may manifest itself in cloud-based deployments, is that the higher-level commit protocol assumes that time increases monotonically on individual machines in the cluster.
-The job manager and workers can use the interval between the last successful hearbeat and the current time as the means by which they can consider themselves to have lost contact with each other and system services.
-In cloud environments clocks may stutter, proceed at significatly different rates, and indeed, may even proceed backwards \cite{anything?}.
+An unrelated problem, but one which may manifest itself in cloud-based deployments,
+is that the higher-level commit protocol assumes that time increases monotonically
+on individual machines in the cluster.
+The job manager and workers can use the interval between the last successful heartbeat
+and the current time as the means by which they can consider themselves to have lost
+contact with each other and system services.
+In cloud environments clocks may stutter, proceed at significatly different rates,
+and indeed, may even proceed backwards, especially if the VMs are moved between
+physical cluster nodes\ \cite{anything?}.
 
-We offer no solution to this, except to question whether virtualized clocks can be considered a reliable source of \emph{time}, and ask: what can be used instead?
-Given that all processes are working with a shared object store, it may be simplest to use this as an approximate source of time, at least to the extent of using its timestamps as a normative source of increasing time values which can be consistently viewed across all workers.
+We offer no solution to this, except to question whether virtualized clocks can
+be considered a reliable source of \emph{time}, and ask: what can be used instead?
+Given that all processes are working with a shared object store, it may be simplest
+to use this as an approximate source of time, at least to the extent of using
+its timestamps as a normative source of increasing time values which can be
+consistently viewed across all workers.
 Yet that itself is a dangerous assumption to make.
 
 
-\section{Related Work}
 
-Apache spark (briefly) offered a zero rename committer, the \emph{Direct Output Committer}\cite{JIRA}.
+\section{Related Work}
+\label{sec:relatedWork}
+
+Apache Spark (briefly) offered a zero rename committer,
+the \emph{Direct Output Committer}\ \cite{JIRA}.
 With this committer, output was written directly to the destination directory;
 both task and job commit operations were reduced to no-ops.
-To avoid concurrency issues, speculative execution of tasks was automatically disabled when this committer was used.
-Unfortunately, the committer was still not resilient to failure: a failed task could not be repeated, as its output was unknown.
-For this reason it was discontinued \cite{DOC-JIRA}.
-It's absence is now noted by users, showing how a much 0-rename committer was valued by users, even if it failed to offer any of the actual semantics of a commit protocol.
-Alternatively: performance is observable, whereas consistency and failures are not considered important until they surface in production systems.
+To avoid concurrency issues, speculative execution of tasks was automatically
+disabled when this committer was used.
+Unfortunately, the committer was still not resilient to failure: a failed
+task could not be repeated, as its output was unknown.
+For this reason it was discontinued \ \cite{DOC-JIRA}.
+It's absence is now noted by users, showing how a much zero-rename committer
+was valued by users, even if it failed to offer any of the actual semantics
+of a commit protocol.
+Alternatively: performance is observable, whereas consistency and failures
+are not considered important until they surface in production systems.
 
-IBM stocator eliminates renames by also having a direct write to the destination  \cite{DBLP:journals/corr/abs-1709-01812}.
-As with the \emph{the Magic Committer}, it modifies the semantics of write operations into the temporary directories of work, here the \texttt{\_temporary} path used by the classic \texttt{FileOutputCommitter}.
-To avoid the failure semantics of Spark's \emph{Direct Output Committer}, every remapped file was given a name which added the job and task attempt IDs, while still preserving the sort order.
+IBM stocator eliminates renames by also having a direct write to the
+destination\ \cite{DBLP:journals/corr/abs-1709-01812}.
+As with the \emph{the Magic Committer}, it modifies the semantics of write
+operations into the temporary directories of work, here the standard
+\texttt{\_temporary} directory used by the classic \texttt{FileOutputCommitter}.
+To avoid the failure semantics of Spark's \emph{Direct Output Committer},
+every remapped file was given a name which added the job and task attempt IDs,
+while still preserving the sort order.
 As a result, failed and aborted tasks and jobs could be cleaned up by their successors.
-Stocator also generated a JSON-formatted \texttt{\_SUCCESS} file, which offered the ability to obtain a consistent list of the final files committed by a job, even in the presence of listing inconsistency.
+Stocator also generats a JSON-formatted \texttt{\_SUCCESS} file, which offers
+the ability to obtain a consistent list of the final files committed by a job,
+even in the presence of listing inconsistency.
 With this design, Stocator does make the output of work immediately visible;
-again there is no task commit, and the job commit is a matter of writing the \texttt{\_SUCCESS} file.
-This is achieved by misleading the classic committer, which believes that it is writing files to a temporary destination and renamining them.
+again there is no task commit, and the job commit is a matter of writing
+the \texttt{\_SUCCESS} file.
+This is achieved by misleading the classic committer, which believes that
+it is writing files to a temporary destination and renamining them.
 The closest of the two S3A committers is the magic committer.
-It too writes the output to a different destination than the location passed to the \texttt{FileOutputFormat} instance writing data.
-However, the data is not actually manifest until the final job is committed: there is no observable change to the destination directory until the job commit.
-Thus it provides the standard semantics of task and job commmit: no data is visible until the job is committed.
+It too writes the output to a different destination than the location passed
+to the \texttt{FileOutputFormat} instance writing data.
+However, the data is not actually manifest until the final job is committed:
+there is no observable change to the destination directory until the job commit.
+Failed tasks can be repeated.
+Thus it provides the standard semantics of task and job commmit: no data is
+visible until the job is committed.
+
+Note that Stocator's task commit operation is a no-op, thus repeatable.
+Job commit is a listing of the output and generation of the manifest;
+as the manifest PUT is atomic, the job commit itself is atomic.
+
+\begin{table}
+  \label{tab:other-committer-attributes}
+  \begin{tabular}{ l c c }
+    \hline
+    & \textbf{Direct Committer} & \textbf{Stocator} \\
+    Speculative Tasks & False & Delete task output in task abort \\
+    Recoverable Job & False & False \\
+    Abortable Job & Delete output directory & Delete output directory \\
+    Observable & True & True \\
+    Atomic Task Commit & True & True \\
+    Idempotent Task Commit & True & True \\
+    Atomic Job Commit & True & True \\
+    Idempotent Job Commit & True & True \\
+    \hline
+  \end{tabular}
+  \caption{Attributes of the Direct and Stocator committer algorithms}
+\end{table}
+
+
+The Direct Committer fails at the foundational requirement: ability to support
+speculative or restarted task attempts.
+
+Stocator also writes to the destination directory, but by renaming the output
+files retains the ability to clean up the output of uncommitted tasks.
+Because neither committer is performing any operation in task commit, and,
+in job commit, simply creating a \texttt{\_SUCCESS}marker, these are all
+repeatable operations.
+
+
+The key differences of the S3A committers are that the written files are
+not observable in the destination directory tree until Job commit.
+The classic file output committers postpone this until task (v2) or job (v1)
+commit, and use rename as the low-cost operation to promote the files.
+
+The Direct and Stocator committers avoid the rename, at the expense of making
+the output visible even before job commit.
+
+\begin{table}
+  \label{tab:s3a-committer-attributes}
+  \begin{tabular}{ l c c }
+    \hline
+    & \textbf{Staging Committer} & \textbf{Magic Committer} \\
+    Speculative Tasks & True & True \\
+    Recoverable Job & False & False \\
+    Abortable Job & True & True \\
+    Observable & False & False \\
+    Atomic Task Commit & True & False \\
+    Idempotent Task Commit & True & True \\
+    Atomic Job Commit & False & False \\
+    Idempotent Job Commit & False & False \\
+    \hline
+  \end{tabular}
+  \caption{Attributes of the S3A committer algorithms}
+\end{table}
+
 
 
 
 \section{Acknowledgements}
+\label{sec:acknowledgements}
 
 \section{References}
+\label{sec:references}
 
 % Bibliography. Include
 % Expects the formality project to be alongside this one.
 
-\bibliography{./formality/papers/bibliography/bibliography}
+\bibliography{../../formality/papers/bibliography/bibliography.bib}
 
-S3Guard
-S3mper
-Spark direct committer JIRAs
-A history of Hadoop's object store => research gate?
+TODO
+\begin{itemize}
+  \item HADOOP-13335, S3Guard
+  \item Spark direct committer JIRAs
+  \item SPARK-10063 Remove DirectParquetOutputCommitter; https://issues.apache.org/jira/browse/SPARK-10063
+  \item SPARK-8413 DirectParquetOutputCommitter doesn't clean up the file on task failure; https://issues.apache.org/jira/browse/SPARK-8413
+  \item S3mper
+  \item A history of Hadoop's object store => research gate/arxiv?
+  \item S3 API
+  \item WASB REST API
+  \item Swift REST API
+\end{itemize}
+
 
 \end{document}
