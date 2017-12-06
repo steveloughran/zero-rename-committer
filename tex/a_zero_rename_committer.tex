@@ -1,6 +1,8 @@
 % a_zer_rename_committer.tex
 \documentclass[9pt,technote]{IEEEtran}
 \usepackage{babel}
+\usepackage{graphicx}
+\usepackage{color}
 
 \title{Zero-rename output committers for working with object storesApache Hadoop and Spark for object storage}
 \author{
@@ -27,6 +29,7 @@
 
 \maketitle
 
+% ========================================================================
 
 \begin{abstract}
 
@@ -56,6 +59,7 @@ so translating writes to these paths as initiating a delayed-completion write to
 
 \end{abstract}
 
+% ========================================================================
 
 \section{Introduction}
 \label{sec:introduction}
@@ -116,6 +120,8 @@ It does offer atomic operations which are used in commit protocols and other
 applications as a means of enforcing exclusivity;
 so permitting the filesystem to act as a mechanism of co-ordinating access across machines.
 
+% ========================================================================
+
 \section{The Hadoop MapReduce Commit Algorithm}
 \label{sec:mr}
 
@@ -175,6 +181,18 @@ A committer can declare whether or not it supports job recovery;
 if it does, it must implement recovery.
 If not, the job must be restartable from the beginning.
 
+The core job
+
+%\begin{figure}
+%  \caption{Hadoop commit protocol (excluding Job recovery)}
+%  \centering
+%  \figurename{fig:commit-protocol}
+%  \includegraphics[width=.8\textwidth]{commit-protocol.png}
+%\end{figure}
+
+\includegraphics[width=.8\textwidth]{commit-protocol.png}
+
+
 The longer a job takes to execute, the higher the probability that the (single)
 job manager will fail, and hence the more valuable the ability to recover from
 a job failure is.
@@ -213,6 +231,15 @@ the entire job.
   \caption{Attributes of the MapReduce File committer algorithms}
 \end{table}
 
+\section{The Spark Commit Protocol}
+
+Spark uses the Hadoop Committers within its commit protocol when
+writing data to filesystems.
+
+Again, it co-ordinates the commit operation between its drivers and executors
+\footnote{there's an option to disable this ``"spark.hadoop.outputCommitCoordination.enabled""}.
+
+% ========================================================================
 
 \section{Hadoop and object stores}
 \label{sec:object-stores}
@@ -254,46 +281,19 @@ If the object store is eventually consistent, then even mimicing the \texttt{ren
 operation is at risk of losing data.
 Thus it is neither fast nor reliable.
 
+% ========================================================================
 \section{Integration with Hadoop and Spark}
-\label{sec:integrationWithHadoopAndSpark}
+\label{sec:integration}
 
 A major challenge with this work is integrating the committers with Hadoop
 and Spark, without making changes to their commit protocols themselves.
 
 This was achieved by modifying the abstract class used for all data formats
-which write to Hadoop filesystems, the `FileOutputFormat`, so that rather than
-returning the standard `FileOutputCommitter`, it was possible to declare
+which write to Hadoop filesystems, the \textt{FileOutputFormat}, so that rather than
+returning the standard \textt{FileOutputCommitter}, it was possible to declare
 a different committer factory for different filesystem schemas\ \cite{MAPREDUCE-6823}.
 The $s3a$ schema is configured to refer to an S3A-specific factory, which
 returns the specific S3A committer chosen on the job configuration.
-
-\section{Limitations}
-\label{sec:limitations}
-
-A key criticism of the new algorithm is that the job commit operation is not atomic;
-it is $O(files)$ operation which may fail partway through.
-We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit;
-the job manager commit algorithm is designed to detect failures in job commits
-of previous attempts, and either recover or fail, according to the actions
-offered by the committer
-
-An unrelated problem, but one which may manifest itself in cloud-based deployments,
-is that the higher-level commit protocol assumes that time increases monotonically
-on individual machines in the cluster.
-The job manager and workers can use the interval between the last successful heartbeat
-and the current time as the means by which they can consider themselves to have lost
-contact with each other and system services.
-In cloud environments clocks may stutter, proceed at significatly different rates,
-and indeed, may even proceed backwards, especially if the VMs are moved between
-physical cluster nodes\ \cite{anything?}.
-
-We offer no solution to this, except to question whether virtualized clocks can
-be considered a reliable source of \emph{time}, and ask: what can be used instead?
-Given that all processes are working with a shared object store, it may be simplest
-to use this as an approximate source of time, at least to the extent of using
-its timestamps as a normative source of increasing time values which can be
-consistently viewed across all workers.
-Yet that itself is a dangerous assumption to make.
 
 
 As far as code integration is concerned, it is not entirely seamless, especially
@@ -315,7 +315,148 @@ We chose not to do this
 The factory design eliminated these risk at the expense of complicating
 Spark+Parquet integration.
 
+% ========================================================================
+\section{Results}
+\label{sec:results}
 
+
+The performance of the new committers is not visible with small amounts
+of data, as the number of HTTP requests is the dominant factor.
+As the amount of data increases, the elimination of the copy operations
+delivers a significant speedup to the new committers.
+With a measured in-S3 copy time of ~6-10MB/s, the saving is 1 second per 10 MB
+of data committed.
+
+Comparing the staging and magic committers is interesting
+
+The Staging committer writes all data locally, with the write bandwidth
+of the local (usually virtual) disk.
+In task commit, this data must be read and uploaded to the S3 service.
+Usually it is the bandwdith between the server and S3 which is the bottleneck,
+though as S3 throttles requests to specific shards, having many servers trying
+to write to the same destination directory tree can slow down the write, irrespective
+of bandwidth.
+\ \cite{cite}.
+If a single task has generated many files, or many tasks of the same job are
+committing nearly simultaneously, this may be observed.
+\footnote{Throttling can also be observed on read operations;
+in such situations adding more workers is counterproductive.}
+
+Job commit is a matter of reading the small pendingset files saved in the
+cluster filesystem (HDFS), and then issuing the relevant POSTs: one per uploaded
+object.
+This is parallelized, and not constrained by bandwidth.
+Capacity in a local pool of HTTP1.1 connections, the time to create more,
+and potentially throttling are the primary limits on IO performance at this point.
+
+The Magic Committer uploads data in blocks as it is written: the larger
+the amount of data created by a single task, the greater the performance
+benefit over the Staging committer's task-commit-time upload.
+However, task commit does list the task attempt directory and read all .pending
+files within, an operation which can take a few hundred milliseconds per file,
+and again, potentially throttled.
+With only a single summary file written back, task commit is never
+bandwidth constrained.
+
+Job commit time is that of the Staging Committer, preceeded by a listing
+of and reading in of the pending files of every committed task.
+This is again a few hundred milliseconds per file, though parallelization
+can reduce the delay.
+
+Ignoring throttling, the magic committer is best with tasks which create
+large amounts of data
+As well as avoiding the upload in the task commit, by reducing the
+amount of storage needed in the virtual machine, VM and Container instances
+with smaller amounts of storage can be request, or simply more tasks executed
+per VM: computation, RAM and network bandwidth are the bottlenecks.
+
+Protocol-wise, both committers meet the requirements of the Hadoop commit
+protocol: no output visible until committed, and, as this materialization
+takes place in job commit, it has better visibility characteristics than
+the V2 algorithm.
+
+One final feature to highlight is the "partitioned committer" variant
+of the Staging Committer, which is designed to update an existing
+dataset in-situ, only considering conflict with existing data in
+those partitions for which data is actually generated.
+This supports workflows where large datasets are updated on a daily basis,
+without the need for any post-job copy of the new day's data into the
+final dataset.
+If the existing workflow for maintaining such large datasets involved
+moving the new data into the aggregated dataset, those renames themselves
+suffer from the performance constraints of the store's COPY operation.
+Here, then, the speedup comes from the overall workflow, rather than
+simply the query.
+
+
+
+
+
+% ========================================================================
+
+\section{Limitations}
+\label{sec:limitations}
+
+A key criticism of the new algorithm is that the job commit operation is not atomic;
+it is $O(files)$ operation which may fail partway through.
+We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit;
+the job manager commit algorithm is designed to detect failures in job commits
+of previous attempts, and either recover or fail, according to the actions
+offered by the committer
+
+There is also the issue that a task may exit without \texttt{Committer.abortTask()}
+being invoked.
+Specifically, the $Task$ process will exit immediately during the ping/response
+heartbeat process if any of a number of conditions are met.
+\begin{enumerate}
+  \item Predefined task limits are exceeded
+  (currently an optional limit on the number of bytes written to the local filesystem.
+  \item Communications with the Job Manager have failed beyond configured limits.
+  \item The reponse to the $ping()$ call is $false$, indicating the current
+  Job Manager does not consider the task to part of its set of active tasks.
+\end{enumerate}
+
+The first check is a defense against an errant process filling the local
+filesystem with data;
+the latter symptoms of and reaction to different failures (loss of manager/network failure)
+and restarted manager with no knowledge of active task, respectively.
+There is also the without-warning failures triggered by the operating system
+if limits on the execution environment are exceeded: usually memory allocation.
+
+While OS-level failures can occur without warning, it would be useful if the
+"managed" system exits triggered in the heartbeat thread were to invoke
+an emergency task cleanup operation.
+For the S3A committers, this would consist of aborting all pending uploads, and
+deleting any local data.
+While the Job committer's $cleanupJob()$ operation is expected to clean up
+the output of all task attempts, active participation of the tasks would
+reduce the time incomplete uploads were pending (reducing costs) and
+potentially free up local disk storage.
+
+This appears to us to be an enhancement to the commit protocol which could
+be considered.
+
+
+One problem which may manifest itself in cloud-based deployments,
+is that the Hadoop commit protocol assumes that time increases monotonically
+on individual machines in the cluster.
+The job manager and workers can use the interval between the last successful heartbeat
+and the current time as the means by which they can consider themselves to have lost
+contact with each other and system services.
+In cloud environments clocks may stutter, proceed at significatly different rates,
+and indeed, may even proceed backwards, especially if the VMs are moved between
+physical cluster nodes\ \cite{anything?}.
+
+We offer no solution to this, except to question whether virtualized clocks can
+be considered a reliable source of \emph{time}, and ask: what can be used instead?
+Given that all processes are working with a shared object store, it may be simplest
+to use this as an approximate source of time, at least to the extent of using
+its timestamps as a normative source of increasing time values which can be
+consistently viewed across all workers.
+Yet that itself is a dangerous assumption to make.
+
+
+% ========================================================================
 
 \section{Related Work}
 \label{sec:relatedWork}
@@ -429,6 +570,18 @@ number of GET requests issued to be that of the number of committed tasks,
 not the number of files.
 
 
+The alternate strategy is move towards declaring the output of a job in
+a manifest file, rather than implicitly defining it as ``all files in the directory
+tree which do not begin with '.' or '_'``.
+The S3A committers and Stocator all generate manifest data in the defacto
+standard \texttt{\_SUCCESS} file.
+For our committers, this was done initially for testing;
+later it included the filesystem statistics of the process, so helping
+collect data on IO costs.
+
+Provided all relevant applications aggree to use a single, shared manifest
+format, it may be possible to
+
 \section{Conclusions and Further Work}
 \label{sec:conclusions}
 
@@ -449,9 +602,20 @@ algorithms which do meet these requirements.
 
 The new Committers are implemented in Apache Hadoop 3.1, with a small bridging
 library to aid integration with Apache Spark\ \cite{cite}.
+We await the bug reports
+
+
+Finally, we note that the Hadoop commit protocols are woefully underdocumented;
+understanding them involved stepping through tests with a debugger.
+Given how fundamental correctness of these algorithms and implementations
+are, and how other projects depend on them
+
+% ========================================================================
 
 \section{Acknowledgements}
 \label{sec:acknowledgements}
+
+% ========================================================================
 
 \section{References}
 \label{sec:references}
@@ -459,21 +623,7 @@ library to aid integration with Apache Spark\ \cite{cite}.
 % Bibliography. Include
 % Expects the formality project to be alongside this one.
 
-\bibliography{../../formality/papers/bibliography/bibliography.bib}
-
-TODO
-\begin{itemize}
-  \item HADOOP-13335, S3Guard
-  \item Spark direct committer JIRAs
-  \item SPARK-10063 Remove DirectParquetOutputCommitter; https://issues.apache.org/jira/browse/SPARK-10063
-  \item SPARK-8413 DirectParquetOutputCommitter doesn't clean up the file on task failure; https://issues.apache.org/jira/browse/SPARK-8413
-  \item S3mper
-  \item A history of Hadoop's object store => research gate/arxiv?
-  \item S3 API
-  \item WASB REST API
-  \item Swift REST API
-  \item https://issues.apache.org/jira/browse/MAPREDUCE-6823 FileOutputFormat to support configurable PathOutputCommitter factory
-\end{itemize}
+\bibliography{bibliography.bib}
 
 
 \end{document}

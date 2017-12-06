@@ -1,0 +1,66 @@
+@startuml
+
+'define icons
+control Manager
+participant "Job Committer"
+control Task
+participant "Task Committer"
+participant "Mapper/Reducer"
+control "YARN NodeManager"
+control "YARN ResourceManager"
+
+' protocol
+'== Initialization ==
+
+Manager -> "Job Committer": setupJob()
+
+== For Each Task Attempt ==
+Manager -> Task: execute work
+Task -> "Task Committer": setupTask()
+Task <-- "Mapper/Reducer": map/reduce
+loop Until execution is complete...
+  Task -> Manager : ping?
+  Manager -> Task : task is known
+  alt task is unknown/timeout/limits-exceeded
+    Task -> Task: exit!
+    Task -> "YARN NodeManager": (exited)
+    "YARN NodeManager" -> "YARN ResourceManager": task exited
+  end
+    Manager -> "YARN ResourceManager": heartbeat request
+    Manager <-- "YARN ResourceManager": heartbeat response [exited tasks]*
+end
+Task <-- "Mapper/Reducer": done
+
+Task -> Manager: can commit?
+Task <-- Manager:  true/false
+
+alt can commit
+  Task -> "Task Committer": needsTaskCommit?
+  Task <-- "Task Committer": true/false
+    alt needs task commit
+    Task -> Manager: commitPending
+    Task -> "Task Committer": commit Task
+    Task <-- "Task Committer": committed Task
+    end
+
+else cannot commit
+  Task -> "Task Committer": abort Task
+  Task <-- "Task Committer": aborted Task
+end
+Task -> Manager : done
+
+alt done-not-received-in time interval
+  Manager -> "Job Committer": cleanupTask()
+  Manager -> Manager: reschedule task
+end
+
+
+== Job Commit==
+
+Manager -> "YARN ResourceManager": heartbeat request
+Manager <-- "YARN ResourceManager": heartbeat response [exited tasks]*
+
+Manager -> "Job Committer": commit Job
+Manager <-- "Job Committer": committed Job
+Manager -> "Job Committer": cleanup Job
+@enduml
