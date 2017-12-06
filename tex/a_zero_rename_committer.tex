@@ -254,6 +254,18 @@ If the object store is eventually consistent, then even mimicing the \texttt{ren
 operation is at risk of losing data.
 Thus it is neither fast nor reliable.
 
+\section{Integration with Hadoop and Spark}
+\label{sec:integrationWithHadoopAndSpark}
+
+A major challenge with this work is integrating the committers with Hadoop
+and Spark, without making changes to their commit protocols themselves.
+
+This was achieved by modifying the abstract class used for all data formats
+which write to Hadoop filesystems, the `FileOutputFormat`, so that rather than
+returning the standard `FileOutputCommitter`, it was possible to declare
+a different committer factory for different filesystem schemas\ \cite{MAPREDUCE-6823}.
+The $s3a$ schema is configured to refer to an S3A-specific factory, which
+returns the specific S3A committer chosen on the job configuration.
 
 \section{Limitations}
 \label{sec:limitations}
@@ -282,6 +294,26 @@ to use this as an approximate source of time, at least to the extent of using
 its timestamps as a normative source of increasing time values which can be
 consistently viewed across all workers.
 Yet that itself is a dangerous assumption to make.
+
+
+As far as code integration is concerned, it is not entirely seamless, especially
+with Spark
+An alternative strategy would have been to retrofit an ``algorithm 3'' inside
+the \textt{FileOutputCommitter}, which would have implemented the plugin point.
+This would have permitted the new committers to be inserted underneath any
+subclass, so retrofit it to classes such as the \textt{ParquetFileOutputCommitter}.
+We chose not to do this
+\begin{enumerate}
+  \item The existing code is complex, containing two intermixed co-recursive
+  algorithms.
+  \item Our chages could unintentionally break the correctness of the existing committer.
+  \item Subclasses of the existing committer must have been implemented to extend
+  the protocol, perhaps by summarizing the output, writing extra files, etc.
+  Changing the superclass behavior to not create output files until job commit
+  ran the risk of breaking all this code.
+\end{enumerate}
+The factory design eliminated these risk at the expense of complicating
+Spark+Parquet integration.
 
 
 
@@ -357,15 +389,15 @@ speculative or restarted task attempts.
 
 Stocator also writes to the destination directory, but by renaming the output
 files retains the ability to clean up the output of uncommitted tasks.
-Because neither committer is performing any operation in task commit, and,
-in job commit, simply creating a \texttt{\_SUCCESS}marker, these are all
-repeatable operations.
+Neither committer is performing any operation in task commit other than creating
+a \texttt{\_SUCCESS} marker, which is both atomic and repeatable.
 
 
 The key differences of the S3A committers are that the written files are
 not observable in the destination directory tree until Job commit.
 The classic file output committers postpone this until task (v2) or job (v1)
 commit, and use rename as the low-cost operation to promote the files.
+
 
 The Direct and Stocator committers avoid the rename, at the expense of making
 the output visible even before job commit.
@@ -389,7 +421,34 @@ the output visible even before job commit.
 \end{table}
 
 
+The magic committer does aggregate the single `.pending` files describing
+one written file into a per-task `.pendingset` file;
+this is repeatable.
+It is done purely to speed up job commit performance, as it reduces the
+number of GET requests issued to be that of the number of committed tasks,
+not the number of files.
 
+
+\section{Conclusions and Further Work}
+\label{sec:conclusions}
+
+Object Stores are becoming a common source and destination of data analysed
+through Apache Hadoop and Spark.
+The support for these stores manages to make them resemble filesystems in
+terms of the API exposed to applications, so enabling existing code to
+interact with the stores without modification.
+However, the core semantics required by conventional commit algorithms, particulary
+that of an $O(1)$ atomic rename, are not not met.
+While the existing Hadoop/Spark commit algorithms appear to work, they lack
+both the performance and correctness delivered when used with a "real" filesystem.
+
+We have demonstrated that the use of object-store specific operations --here
+the multipart PUT with its ability to complete the upload from a different host--
+alow for object-store aware commit algorithms to be implemented,
+algorithms which do meet these requirements.
+
+The new Committers are implemented in Apache Hadoop 3.1, with a small bridging
+library to aid integration with Apache Spark\ \cite{cite}.
 
 \section{Acknowledgements}
 \label{sec:acknowledgements}
@@ -413,6 +472,7 @@ TODO
   \item S3 API
   \item WASB REST API
   \item Swift REST API
+  \item https://issues.apache.org/jira/browse/MAPREDUCE-6823 FileOutputFormat to support configurable PathOutputCommitter factory
 \end{itemize}
 
 
