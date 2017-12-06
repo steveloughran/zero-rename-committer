@@ -1,12 +1,84 @@
 %% This BibTeX bibliography file was created using BibDesk.
 %% http://bibdesk.sourceforge.net/
 
-%% Created for Steve Loughran at 2017-11-29 13:15:58 +0000 
+%% Created for Steve Loughran at 2017-12-06 20:15:33 +0000 
 
 
 %% Saved with string encoding Unicode (UTF-8) 
 
 
+
+@url{AWS-S3-throttling,
+	Author = {Amazon},
+	Date-Added = {2017-12-06 20:12:58 +0000},
+	Date-Modified = {2017-12-06 20:14:27 +0000},
+	Title = {Request Rate and Performance Considerations},
+	Url = {http://docs.aws.amazon.com/AmazonS3/latest/dev/request-rate-perf-considerations.html}}
+
+@url{AWS-clock-service,
+	Author = {Randall Hunt},
+	Date-Added = {2017-12-06 20:12:58 +0000},
+	Date-Modified = {2017-12-06 20:14:27 +0000},
+	Title = {Keeping Time With Amazon Time Sync Service},
+	Url = {https://aws.amazon.com/blogs/aws/keeping-time-with-amazon-time-sync-service/},
+	Urldate = {2017-11-27},
+	Year = {2017} }
+
+
+@url{HADOOP-13345,
+	Author = {Chris Nauroth and Minglaing Liu and Aaron Fabbri and Sean Mackrory and Steve Loughran},
+	Date-Added = {2017-12-06 20:12:58 +0000},
+	Date-Modified = {2017-12-06 20:14:27 +0000},
+	Title = {HADOOP-13345. S3Guard: Improved Consistency for S3A},
+	Url = {https://issues.apache.org/jira/browse/HADOOP-13345},
+	Urldate = {2016-07-06},
+	Year = {2016}}
+
+@url{HADOOP-13786,
+	Author = {Steve Loughran and Ryan Blue},
+	Date-Added = {2017-12-06 20:12:58 +0000},
+	Date-Modified = {2017-12-06 20:14:27 +0000},
+	Title = {HADOOP-13786. Add S3A committer for zero-rename commits to S3 endpoints},
+	Url = {https://issues.apache.org/jira/browse/HADOOP-13786},
+	Urldate = {2016-11-02},
+	Year = {2016}}
+
+
+@url{MAPREDUCE-6823,
+	Author = {Steve Loughran},
+	Date-Added = {2017-12-06 20:04:47 +0000},
+	Date-Modified = {2017-12-06 20:11:52 +0000},
+	Title = {MAPREDUCE-6823. FileOutputFormat to support configurable PathOutputCommitter factory},
+	Url = {https://issues.apache.org/jira/browse/MAPREDUCE-6823},
+	Urldate = {2016-12-14},
+	Year = {2016}}
+
+@url{SPARK-8029,
+	Author = {Davies Liu},
+	Date-Added = {2017-12-06 20:08:54 +0000},
+	Date-Modified = {2017-12-06 20:11:35 +0000},
+	Title = {SPARK-8029. ShuffleMapTasks must be robust to concurrent attempts on the same executor},
+	Url = {https://issues.apache.org/jira/browse/SPARK-8029},
+	Urldate = {2015-07-02},
+	Year = {2015}}
+
+@url{SPARK-8413,
+	Author = {Mingyu Kim},
+	Date-Added = {2017-12-06 20:08:54 +0000},
+	Date-Modified = {2017-12-06 20:11:35 +0000},
+	Title = {SPARK-8413. DirectParquetOutputCommitter doesn't clean up the file on task failure},
+	Url = {https://issues.apache.org/jira/browse/SPARK-8413},
+	Urldate = {2015-07-15},
+	Year = {2015}}
+
+@url{SPARK-10063,
+	Author = {Reynold Xin},
+	Date-Added = {2017-12-06 20:04:47 +0000},
+	Date-Modified = {2017-12-06 20:11:52 +0000},
+	Title = {SPARK-10063. Remove DirectParquetOutputCommitter},
+	Url = {https://issues.apache.org/jira/browse/SPARK-10063},
+	Urldate = {2015-08-17},
+	Year = {2015}}
 
 @article{DBLP:journals/corr/abs-1709-01812,
 	Archiveprefix = {arXiv},
@@ -40,20 +112,3 @@
 	Url = {http://dl.acm.org/citation.cfm?id=1251254.1251264},
 	Year = {2004},
 	Bdsk-Url-1 = {http://dl.acm.org/citation.cfm?id=1251254.1251264}}
-
-%\begin{itemize}
-%\item HADOOP-13335, S3Guard
-%\item Spark direct committer JIRAs
-%\item SPARK-10063 Remove DirectParquetOutputCommitter; https://issues.apache.org/jira/browse/SPARK-10063
-%\item SPARK-8413 DirectParquetOutputCommitter doesn't clean up the file on task failure; https://issues.apache.org/jira/browse/SPARK-8413
-%\item S3mper
-%\item A history of Hadoop's object store = > research gate/arxiv?
-%\item S3 API
-%\item WASB REST API
-%\item Swift REST API
-%\item https://issues.apache.org/jira/browse/MAPREDUCE-6823 FileOutputFormat to support configurable PathOutputCommitter factory
-%\item AwS docs on s3 throttling
-%item Link to cloud-integration module
-% https://issues.apache.org/jira/browse/SPARK-4879 ; Missing output partitions after job completes with speculative execution
-% https://issues.apache.org/jira/browse/SPARK-8029 ShuffleMapTasks must be robust to concurrent attempts on the same executor
-%\end{itemize}

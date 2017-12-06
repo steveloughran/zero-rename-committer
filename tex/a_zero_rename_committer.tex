@@ -1,23 +1,27 @@
 % a_zer_rename_committer.tex
-\documentclass[9pt,technote]{IEEEtran}
+\documentclass[paper]{IEEEtran}
 \usepackage{babel}
 \usepackage{graphicx}
 \usepackage{color}
+\usepackage{cite}
 
-\title{Zero-rename output committers for working with object storesApache Hadoop and Spark for object storage}
+\title{
+Making object stores a destination\\
+Zero-rename object-storage committers for Apache Hadoop and Spark}
+
+% Yes, this titling is broken
 \author{
-  Loughran, Steve\\
-  \texttt{stevel@hortonworks.com}
+  Loughran, Steve
+  \texttt{stevel@hortonworks.com}\\
 \and
-  Blue, Ryan\\
-  \texttt{rblue@netflix.com}
-
+  Blue, Ryan
+  \texttt{rblue@netflix.com}\\
+\and
+  Radia, Sanjay \texttt{sanjay@hortonworks.com} \\
+\and
+  Balamohan, Rajesh \texttt{rbalamohan@hortonworks.com} \\
 }
 
-%
-%\author{Sanjay Radia, Hortonworks}
-%\author{Rajesh Balamohan, Hortonworks}
-%
 \date{December 2017}
 
 \begin{document}
@@ -183,10 +187,10 @@ If not, the job must be restartable from the beginning.
 
 
 \begin{figure*}
-  \caption{Hadoop commit protocol (excluding Job recovery)}
   \centering
-  \figurename{fig:commit-protocol}
   \includegraphics[width=.8\textwidth]{commit-protocol.png}
+  \caption{Hadoop commit protocol (excluding Job recovery)}
+  \label{fig:commit-protocol}
 \end{figure*}
 
 
@@ -222,7 +226,7 @@ A restarted job must delete the contents of this directory and reexecute
 the entire job.
 
 \begin{table}
-  \label{tab:file-committer-attributes}
+  \caption{Attributes of the MapReduce File committer algorithms}
   \begin{tabular}{ l c c }
     \hline
     & \textbf{v1} & \textbf{v2} \\
@@ -237,10 +241,13 @@ the entire job.
     Idempotent Job Commit & False & True \\
     \hline
   \end{tabular}
-  \caption{Attributes of the MapReduce File committer algorithms}
+  \label{tab:file-committer-attributes}
 \end{table}
 
+% ========================================================================
+
 \section{The Spark Commit Protocol}
+\label{sec:theSparkCommitProtocol}
 
 Spark uses the Hadoop Committers within its commit protocol when
 writing data to filesystems.
@@ -327,6 +334,29 @@ We chose not to do this
 The factory design eliminated these risk at the expense of complicating
 Spark+Parquet integration.
 
+
+One question which arose in this integration was \emph{how can you tell if it worked?}.
+
+This is done through testing: unit tests of the underlying IO operations,
+invocations of the commit protocols in the normal and failing sequences,
+then small queries executed on the local system.
+The Spark tests were derived from the existing suites of Spark SQL tests,
+thus demonstrating consistent behaviour in test scope.
+To aid in demonstrating resilience to delayed consistency in object listing
+operations and transient network failures, Hadoop's \texttt{hadoop-aws} module
+now contains a special fault-injecting S3 connector: heavy throttling and
+delayed consistency can both be simulated in the downstream tests, so
+increasing confidence.
+Larger integration test are in our organizations, so validating functionality
+with production-scale workloads.
+Again, fault injection can be enabled for extra stress.
+We note that this testing is does not prove the committers' correctness,
+merely demonstrate that they comply with the protocols' requirements in
+the presence of some simulated failure modes.
+
+
+
+
 % ========================================================================
 \section{Results}
 \label{sec:results}
@@ -348,7 +378,7 @@ Usually it is the bandwdith between the server and S3 which is the bottleneck,
 though as S3 throttles requests to specific shards, having many servers trying
 to write to the same destination directory tree can slow down the write, irrespective
 of bandwidth.
-\ \cite{cite}.
+\ \cite{S3-throttling}.
 If a single task has generated many files, or many tasks of the same job are
 committing nearly simultaneously, this may be observed.
 \footnote{Throttling can also be observed on read operations;
@@ -457,15 +487,9 @@ and the current time as the means by which they can consider themselves to have 
 contact with each other and system services.
 In cloud environments clocks may stutter, proceed at significatly different rates,
 and indeed, may even proceed backwards, especially if the VMs are moved between
-physical cluster nodes\ \cite{anything?}.
-
-We offer no solution to this, except to question whether virtualized clocks can
-be considered a reliable source of \emph{time}, and ask: what can be used instead?
-Given that all processes are working with a shared object store, it may be simplest
-to use this as an approximate source of time, at least to the extent of using
-its timestamps as a normative source of increasing time values which can be
-consistently viewed across all workers.
-Yet that itself is a dangerous assumption to make.
+physical cluster nodes.
+We hope that Amazon's newly introduced \emph{Time Sync Service}
+can address this on well-configured systems\ \cite{AWS-clock-service}.
 
 
 % ========================================================================
@@ -481,7 +505,7 @@ To avoid concurrency issues, speculative execution of tasks was automatically
 disabled when this committer was used.
 Unfortunately, the committer was still not resilient to failure: a failed
 task could not be repeated, as its output was unknown.
-For this reason it was discontinued \ \cite{DOC-SPARK-10063}.
+For this reason it was discontinued \ \cite{SPARK-10063}.
 It's absence is now noted by users, showing how a much zero-rename committer
 was valued by users, even if it failed to offer any of the actual semantics
 of a commit protocol.
@@ -613,7 +637,7 @@ alow for object-store aware commit algorithms to be implemented,
 algorithms which do meet these requirements.
 
 The new Committers are implemented in Apache Hadoop 3.1, with a small bridging
-library to aid integration with Apache Spark\ \cite{cloud-integration-module}.
+library to aid integration with Apache Spark\ \cite{HADOOP-13786}.
 We await the bug reports providing us with real-world deployment experiences
 with excitement and trepidation.
 
@@ -624,11 +648,10 @@ Given how critical the correctness of the protocol and committers and implementa
 are, and how other projects depend also use the same code, there
 are opportunities to better specify the protocol and APIs, and review
 their use.
-This document should act as a start of this.
 
 % ========================================================================
 
-\section{Acknowledgements}
+\section*{Acknowledgements}
 \label{sec:acknowledgements}
 
 % ========================================================================
@@ -637,8 +660,8 @@ This document should act as a start of this.
 \label{sec:references}
 
 % Bibliography. Include
-% Expects the formality project to be alongside this one.
 
+\bibliographystyle{IEEEtran}
 \bibliography{bibliography.bib}
 
 
