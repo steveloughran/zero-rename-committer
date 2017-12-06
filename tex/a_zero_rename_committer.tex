@@ -181,24 +181,33 @@ A committer can declare whether or not it supports job recovery;
 if it does, it must implement recovery.
 If not, the job must be restartable from the beginning.
 
-The core job
 
-%\begin{figure}
-%  \caption{Hadoop commit protocol (excluding Job recovery)}
-%  \centering
-%  \figurename{fig:commit-protocol}
-%  \includegraphics[width=.8\textwidth]{commit-protocol.png}
-%\end{figure}
+\begin{figure*}
+  \caption{Hadoop commit protocol (excluding Job recovery)}
+  \centering
+  \figurename{fig:commit-protocol}
+  \includegraphics[width=.8\textwidth]{commit-protocol.png}
+\end{figure*}
 
-\includegraphics[width=.8\textwidth]{commit-protocol.png}
 
+The operations to commit the work, the Task Committer and Job Committer,
+are all implemented in the same class, an implementatipon of \texttt{OutputCommitter}.
+For writing to HDFS, this is done in the \texttt{FileOutputCommitter}.
+
+This actually implements two separate algorithms for committing work
 
 The longer a job takes to execute, the higher the probability that the (single)
-job manager will fail, and hence the more valuable the ability to recover from
-a job failure is.
+job manager will fail, and hence the ability to recover from a job failure
+considered valuable.
+
+
 Jobs which take a few minutes are generally so inexpensive to
 restart that focusing on execution time over recoverability is a better strategy.
-For this reason, Hadoop MapReduce implements two algorithms
+
+For this reason, Hadoop's \texttt{FileOutputCommitter} implements two
+different commit algorithms, the purer "V1" and more robust algorithm and the
+faster "V2" algorithm.
+
 
 
 \textbf{V1.}
@@ -237,7 +246,8 @@ Spark uses the Hadoop Committers within its commit protocol when
 writing data to filesystems.
 
 Again, it co-ordinates the commit operation between its drivers and executors
-\footnote{there's an option to disable this ``"spark.hadoop.outputCommitCoordination.enabled""}.
+\footnote{Spark actually provides a hidden option to disable this
+co-ordination  \cite{SPARK-8029}; it is not clear if and how this is used.}.
 
 % ========================================================================
 
@@ -303,7 +313,8 @@ the \textt{FileOutputCommitter}, which would have implemented the plugin point.
 This would have permitted the new committers to be inserted underneath any
 subclass, so retrofit it to classes such as the \textt{ParquetFileOutputCommitter}.
 We chose not to do this
-\begin{enumerate}
+
+\item \begin{enumerate}
   \item The existing code is complex, containing two intermixed co-recursive
   algorithms.
   \item Our chages could unintentionally break the correctness of the existing committer.
@@ -312,6 +323,7 @@ We chose not to do this
   Changing the superclass behavior to not create output files until job commit
   ran the risk of breaking all this code.
 \end{enumerate}
+
 The factory design eliminated these risk at the expense of complicating
 Spark+Parquet integration.
 
@@ -462,14 +474,14 @@ Yet that itself is a dangerous assumption to make.
 \label{sec:relatedWork}
 
 Apache Spark (briefly) offered a zero rename committer,
-the \emph{Direct Output Committer}\ \cite{JIRA}.
+the \emph{Direct Output Committer}.
 With this committer, output was written directly to the destination directory;
 both task and job commit operations were reduced to no-ops.
 To avoid concurrency issues, speculative execution of tasks was automatically
 disabled when this committer was used.
 Unfortunately, the committer was still not resilient to failure: a failed
 task could not be repeated, as its output was unknown.
-For this reason it was discontinued \ \cite{DOC-JIRA}.
+For this reason it was discontinued \ \cite{DOC-SPARK-10063}.
 It's absence is now noted by users, showing how a much zero-rename committer
 was valued by users, even if it failed to offer any of the actual semantics
 of a commit protocol.
@@ -572,7 +584,7 @@ not the number of files.
 
 The alternate strategy is move towards declaring the output of a job in
 a manifest file, rather than implicitly defining it as ``all files in the directory
-tree which do not begin with '.' or '_'``.
+tree which do not begin with '.' or '\_'``.
 The S3A committers and Stocator all generate manifest data in the defacto
 standard \texttt{\_SUCCESS} file.
 For our committers, this was done initially for testing;
@@ -601,14 +613,18 @@ alow for object-store aware commit algorithms to be implemented,
 algorithms which do meet these requirements.
 
 The new Committers are implemented in Apache Hadoop 3.1, with a small bridging
-library to aid integration with Apache Spark\ \cite{cite}.
-We await the bug reports
+library to aid integration with Apache Spark\ \cite{cloud-integration-module}.
+We await the bug reports providing us with real-world deployment experiences
+with excitement and trepidation.
 
 
 Finally, we note that the Hadoop commit protocols are woefully underdocumented;
 understanding them involved stepping through tests with a debugger.
-Given how fundamental correctness of these algorithms and implementations
-are, and how other projects depend on them
+Given how critical the correctness of the protocol and committers and implementations
+are, and how other projects depend also use the same code, there
+are opportunities to better specify the protocol and APIs, and review
+their use.
+This document should act as a start of this.
 
 % ========================================================================
 
