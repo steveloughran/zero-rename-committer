@@ -1,13 +1,15 @@
 % a_zer_rename_committer.tex
-\documentclass[paper]{IEEEtran}
-\usepackage{babel}
+\documentclass[conference]{IEEEtran}
+%\usepackage{babel}
 \usepackage{graphicx}
 \usepackage{color}
 \usepackage{cite}
 
+% ========================================================================
+
 \title{
-Making object stores a destination\\
-Zero-rename object-storage committers for Apache Hadoop and Spark}
+A Zero-rename committer:\\
+object-storage as a destination for Apache Hadoop and Spark}
 
 % Yes, this titling is broken
 \author{
@@ -24,11 +26,9 @@ Zero-rename object-storage committers for Apache Hadoop and Spark}
 
 \date{December 2017}
 
+% ========================================================================
+
 \begin{document}
-%\parindent 0pt
-%\setlength{\parskip}{3ex}
-
-
 
 
 \maketitle
@@ -103,7 +103,7 @@ of a worker to become completed work, simply by moving all the output to a well 
 And, when the job completes, its final output may be renamed to a new location to become
 publicly visible.
 
-As covered in\ \cite{Dean:2004:MSD:1251254.1251264}:
+As covered in\ \cite{Dean_2004_MSD_1251254_1251264}:
 
 \begin{quote}
 We rely on the atomic rename operation provided by the underlying file system
@@ -156,8 +156,6 @@ attempt at the job being started).
 
 \end{enumerate}
 
-
-
 This leads to some specific requirements of the implementation, requirements
 which can be used to assess the correctness of the implementation.
 
@@ -185,7 +183,6 @@ A committer can declare whether or not it supports job recovery;
 if it does, it must implement recovery.
 If not, the job must be restartable from the beginning.
 
-
 \begin{figure*}
   \centering
   \includegraphics[width=.8\textwidth]{commit-protocol.png}
@@ -193,6 +190,36 @@ If not, the job must be restartable from the beginning.
   \label{fig:commit-protocol}
 \end{figure*}
 
+An incomplete UML sequence diagram of the commit protocol is
+show in \ref{fig:commit-protocol}.
+
+% -----------------------------------------------------------------------
+
+\subsection{Optional recoverable failure modes}
+\label{subsec:optionalRecoverableFailureModes}
+
+\subsubsection{Job Recovery}
+The second Job driver process queries the Job Committer as to whether job
+recovery is supported.
+A committer can declare whether or not it supports job recovery;
+If it does, it must implement recovery on a task-by-task basis;
+all tasks which have not been executed or successfully recovered will be
+re-run.
+If job recovery is not support the entire job is re-executed.
+
+\subsubsection{Bad Records}
+
+Omitted: map/reduce failure from bad data
+
+To avoid an entire job failing due to a single unprocesseable records,
+there is an option to skip records whose processing raises an exception.
+If the number of failures in a map or reduce operation is below a given
+threshold, these records will not result in a task reporting itself as
+having failed.
+This is not of direct relevance to the commit protocol.
+
+
+\subsubsection{Hadoops FileOutputCommitter}
 
 The operations to commit the work, the Task Committer and Job Committer,
 are all implemented in the same class, an implementatipon of \texttt{OutputCommitter}.
@@ -249,12 +276,18 @@ the entire job.
 \section{The Spark Commit Protocol}
 \label{sec:theSparkCommitProtocol}
 
+Apache Spark's execution model is significantly different from
+that of Hadoop.
+Rather than dedicate a single process to executing a single operation
+across a subset of the source data, Spark creates a set of \emph{Executors},
+each of which can execute runs a number of threads
+
 Spark uses the Hadoop Committers within its commit protocol when
 writing data to filesystems.
 
 Again, it co-ordinates the commit operation between its drivers and executors
 \footnote{Spark actually provides a hidden option to disable this
-co-ordination  \cite{SPARK-8029}; it is not clear if and how this is used.}.
+coordination\ \cite{SPARK-8029}; it is not clear if and how this is used.}.
 
 % ========================================================================
 
@@ -306,8 +339,8 @@ A major challenge with this work is integrating the committers with Hadoop
 and Spark, without making changes to their commit protocols themselves.
 
 This was achieved by modifying the abstract class used for all data formats
-which write to Hadoop filesystems, the \textt{FileOutputFormat}, so that rather than
-returning the standard \textt{FileOutputCommitter}, it was possible to declare
+which write to Hadoop filesystems, the \texttt{FileOutputFormat}, so that rather than
+returning the standard \texttt{FileOutputCommitter}, it was possible to declare
 a different committer factory for different filesystem schemas\ \cite{MAPREDUCE-6823}.
 The $s3a$ schema is configured to refer to an S3A-specific factory, which
 returns the specific S3A committer chosen on the job configuration.
@@ -316,12 +349,12 @@ returns the specific S3A committer chosen on the job configuration.
 As far as code integration is concerned, it is not entirely seamless, especially
 with Spark
 An alternative strategy would have been to retrofit an ``algorithm 3'' inside
-the \textt{FileOutputCommitter}, which would have implemented the plugin point.
+the \texttt{FileOutputCommitter}, which would have implemented the plugin point.
 This would have permitted the new committers to be inserted underneath any
-subclass, so retrofit it to classes such as the \textt{ParquetFileOutputCommitter}.
+subclass, so retrofit it to classes such as the \texttt{ParquetFileOutputCommitter}.
 We chose not to do this
 
-\item \begin{enumerate}
+\begin{enumerate}
   \item The existing code is complex, containing two intermixed co-recursive
   algorithms.
   \item Our chages could unintentionally break the correctness of the existing committer.
@@ -378,7 +411,7 @@ Usually it is the bandwdith between the server and S3 which is the bottleneck,
 though as S3 throttles requests to specific shards, having many servers trying
 to write to the same destination directory tree can slow down the write, irrespective
 of bandwidth.
-\ \cite{S3-throttling}.
+\ \cite{AWS-S3-throttling}.
 If a single task has generated many files, or many tasks of the same job are
 committing nearly simultaneously, this may be observed.
 \footnote{Throttling can also be observed on read operations;
@@ -446,10 +479,10 @@ the job manager commit algorithm is designed to detect failures in job commits
 of previous attempts, and either recover or fail, according to the actions
 offered by the committer
 
-There is also the issue that a task may exit without \texttt{Committer.abortTask()}
-being invoked.
-Specifically, the $Task$ process will exit immediately during the ping/response
+A task process may exit without \texttt{abortTask()} being invoked.
+Specifically, it exit immediately during the ping/response
 heartbeat process if any of a number of conditions are met.
+
 \begin{enumerate}
   \item Predefined task limits are exceeded
   (currently an optional limit on the number of bytes written to the local filesystem.
@@ -460,7 +493,7 @@ heartbeat process if any of a number of conditions are met.
 
 The first check is a defense against an errant process filling the local
 filesystem with data;
-the latter symptoms of and reaction to different failures (loss of manager/network failure)
+the latter are symptoms of and reaction to different failures (loss of manager/network failure)
 and restarted manager with no knowledge of active task, respectively.
 There is also the without-warning failures triggered by the operating system
 if limits on the execution environment are exceeded: usually memory allocation.
@@ -513,7 +546,7 @@ Alternatively: performance is observable, whereas consistency and failures
 are not considered important until they surface in production systems.
 
 IBM stocator eliminates renames by also having a direct write to the
-destination\ \cite{DBLP:journals/corr/abs-1709-01812}.
+destination\ \cite{DBLP_journals_corr_abs-1709-01812}.
 As with the \emph{the Magic Committer}, it modifies the semantics of write
 operations into the temporary directories of work, here the standard
 \texttt{\_temporary} directory used by the classic \texttt{FileOutputCommitter}.
@@ -547,9 +580,9 @@ as the manifest PUT is atomic, the job commit itself is atomic.
   \begin{tabular}{ l c c }
     \hline
     & \textbf{Direct Committer} & \textbf{Stocator} \\
-    Speculative Tasks & False & Delete task output in task abort \\
+    Speculative Tasks & False & Delete task output \\
     Recoverable Job & False & False \\
-    Abortable Job & Delete output directory & Delete output directory \\
+    Abortable Job & Delete output & Delete output \\
     Observable & True & True \\
     Atomic Task Commit & True & True \\
     Idempotent Task Commit & True & True \\
@@ -608,7 +641,7 @@ not the number of files.
 
 The alternate strategy is move towards declaring the output of a job in
 a manifest file, rather than implicitly defining it as ``all files in the directory
-tree which do not begin with '.' or '\_'``.
+tree which do not begin with '.' or '\_'''.
 The S3A committers and Stocator all generate manifest data in the defacto
 standard \texttt{\_SUCCESS} file.
 For our committers, this was done initially for testing;

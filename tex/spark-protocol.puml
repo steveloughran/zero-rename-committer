@@ -6,8 +6,6 @@ participant "Job Committer"
 control Executor
 participant "Task Committer"
 participant Operation
-control "YARN NodeManager"
-control "YARN ResourceManager"
 
 ' protocol
 '== Initialization ==
@@ -17,21 +15,8 @@ Driver -> "Job Committer": setupJob()
 == For Each Task Attempt ==
 Driver -> Executor: execute work
 Executor -> "Task Committer": setupTask()
-Executor --> Operation: map/reduce
-loop Until execution is complete...
-  Executor -> Driver : ping?
-  Driver -> Executor : task is known
-  alt task is unknown/timeout/limits-exceeded
-    Executor -> Executor: exit!
-    Executor -> "YARN NodeManager": (exited)
-    "YARN NodeManager" -> "YARN ResourceManager": process exited
-  end
-    Driver -> "YARN ResourceManager": heartbeat request
-    Driver <-- "YARN ResourceManager": heartbeat response [exited tasks]*
-end
-Executor <-- Operation: map/reduce finished
-
-'TODO: MR failure
+Executor --> Operation: execute
+Executor <-- Operation: finished
 
 Executor -> Driver: can commit?
 Executor <-- Driver:  <commit | abort>
@@ -50,9 +35,6 @@ else abort
   Executor <-- "Task Committer": aborted task
 end
 Executor -> Driver : done
-Executor -> Executor: exit!
-Executor -> "YARN NodeManager": (exited)
-"YARN NodeManager" -> "YARN ResourceManager": process exited
 
 alt done-not-received-in time interval
   Driver -> "Job Committer": cleanupTask()
@@ -62,16 +44,10 @@ end
 
 == Job Commit==
 
-Driver -> "YARN ResourceManager": heartbeat request
-Driver <-- "YARN ResourceManager": heartbeat response [exited tasks]*
 
 Driver -> "Job Committer": commitJob()
 Driver <-- "Job Committer": committed job
 Driver -> "Job Committer": cleanupJob()
-Driver -> "YARN ResourceManager": finished
-Driver -> Driver: exit!
-Driver -> "YARN NodeManager": (exited)
-"YARN NodeManager" -> "YARN ResourceManager": process exited
 
 
 @enduml
