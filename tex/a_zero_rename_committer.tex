@@ -9,6 +9,8 @@
 \usepackage{listings}
 %\usepackage{minted}
 \usepackage{underscore}
+\usepackage{multicol}
+\usepackage{float}
 
 % ========================================================================
 
@@ -496,6 +498,9 @@ def commitJob(fs, jobAttemptDir, dest):
 
 \textbf{\texttt{mergePathsV1(FileSystem fs, FileStatus src, Path dest)} Algorithm}
 
+\begin{algorithm*}
+\caption{V1 algorithm}
+\label{alg:commitv1}
 \begin{algorithmic}
 \IF ($fs.exists(dest)$)
   \STATE $toStat \Leftarrow fs.getFileStatus(dest)$
@@ -505,28 +510,28 @@ def commitJob(fs, jobAttemptDir, dest):
 
 \IF ($src.isFile$)
   \IF ($not toStat is None$)
-    $fs.delete(dest, recursive = True)$
+    \STATE $fs.delete(dest, recursive = True)$
   \ENDIF
-  $fs.rename(src.getPath, dest)$
+  \STATE $fs.rename(src.getPath, dest)$
 \ELSE
   \IF ($src.isDirectory$)
     \IF ($not toStat is None$)
       \IF ($not toStat.isDirectory$)
-        $fs.delete(dest)$
-        $fs.rename(src.getPath(), dest)$
+        \STATE $fs.delete(dest)$
+        \STATE $fs.rename(src.getPath(), dest)$
       \ELSE
         \FOR $\all c \in fs.listStatus(src.getPath)$
-          $mergePathsV1(fs, child, dest + c.getName)$
+          \STATE $mergePathsV1(fs, child, dest + c.getName)$
         \ENDFOR
       \ENDIF
     \ENDIF
   \ENDIF
 \ELSE
-  $fs.rename(src.getPath(), dest)$
+  \STATE $fs.rename(src.getPath(), dest)$
 \ENDIF
 
 \end{algorithmic}
-
+\end{algorithm*}
 
 All the files and directories are promoted to the destination directory.
 
