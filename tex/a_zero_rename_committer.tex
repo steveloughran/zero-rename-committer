@@ -427,9 +427,12 @@ None: directories are created on demand.
 
 The commit is required iff data was generated
 
-\begin{algorithmic}
-  \RETURN $fs.exists(taskAttemptPath)$
-\end{algorithmic}
+\begin{function}
+\caption{$needsTaskCommit()$}
+
+\SetKwFunction{exists}{exists}
+  \exists(fs, taskAttemptPath)
+\end{function}
 
 This is a common place where listing inconsistencies will surface.
 
@@ -438,8 +441,9 @@ This is a common place where listing inconsistencies will surface.
 
 Rename task attempt path to task committed path.
 
-\begin{algorithm}[H]
+\begin{procedure}[H]
 %\SetAlgoLined
+\caption{$commitTask()$}
 \SetKwData{fs}{fs}
 \SetKwData{taskCommittedPath}{taskCommittedPath}
 \SetKwData{taskAttemptPath}{taskAttemptPath}
@@ -447,13 +451,11 @@ Rename task attempt path to task committed path.
 \SetKwFunction{delete}{delete}
 \SetKwFunction{rename}{rename}
 %\KwResult{how to write algorithm with \LaTeX2e }
-initialization\;
 \If{\exists($fs$, $taskAttemptPath$)}{
 \delete($fs$, $taskCommittedPath$, $recursive$)\;
 \rename($fs$, $taskAttemptPath$, $taskCommittedPath$) \;
 }
-\caption{commitTask()}
-\end{algorithm}
+\end{procedure}
 
 
 In a file system, this is an $O(1)$ atomic operation.
@@ -477,7 +479,7 @@ final path.
 
 Delete task attempt path.
 
-\begin{algorithm}[H]
+\begin{procedure}[H]
 %  \SetAlgoLined
   \SetKwFunction{exists}{exists}
   \SetKwFunction{delete}{delete}
@@ -485,7 +487,7 @@ Delete task attempt path.
   %\KwResult{how to write algorithm with \LaTeX2e }
   \delete($fs$, $taskAttemptPath$, $recursive$)\;
   \caption{abortTask()}
-\end{algorithm}
+\end{procedure}
 
 
 On a genuine fileystem this is an $O(1)$` operation.
@@ -520,7 +522,7 @@ create 0-byte `\_SUCCESS` file in the destination directory.
 
 % ------------------------------------------------------------
 \begin{procedure*}[H]
-\label{alg:commitv1}
+\label{alg:mergePathsV1}
 \caption{$mergePathsV1(fs, rc, dest)$}
 \SetKwFunction{delete}{delete}
 \SetKwFunction{exists}{exists}
@@ -546,7 +548,7 @@ create 0-byte `\_SUCCESS` file in the destination directory.
       \rename(fs, src, dest)\;
     } {
       \For {c $\leftarrow$ \listFiles(fs, src)} {
-       \mergePaths(fs, child, dest + c.name)\;
+       \mergePaths(fs, c, dest + c.name)\;
       }
     }
   }{
@@ -587,10 +589,10 @@ be repeated.
 
 As a result, this algorithm declares that the commit job is not repeatable.
 
-\begin{lstlisting}[language=Python]
-def isCommitJobRepeatable() :
-  return True
-\end{lstlisting}
+\begin{function}
+\caption{$isCommitJobRepeatable()$}
+  false\;
+\end{function}
 
 A failure in the job commit requires
 the entire job to be executed so as to recover from the failure.
@@ -600,24 +602,25 @@ the entire job to be executed so as to recover from the failure.
 
 Delete all data under job attempt path.
 
-\begin{lstlisting}[language=Python]
-def abortJob(fs, jobAttemptDir, dest):
-  fs.delete(jobAttemptDir, recursive = True)
-\end{lstlisting}
+\begin{procedure}
+\caption{$abortJob()$}
+  \delete(fs, jobAttemptDir, recursive)\;
+\end{procedure}
 
 \textbf{Job Cleanup}
 
-\begin{lstlisting}[language=Python]
-def cleanupJob(fs, dest):
-  fs.delete('\$dest/\_temporary', recursive = True)
-\end{lstlisting}
+\begin{procedure}
+\caption{$cleanupJob()$}
+\delete(fs, '\$dest/\_temporary', recursive)
+\end{procedure}
 
 
 \textbf{Job Recovery}
 
 \begin{enumerate}
 
-\item Data under task committed paths is retained
+\item Data under task committed paths of all previous attempts is moved
+into the new job attempt directory.
 \item All directories under \texttt{\$dest/\_temporary/\$appAttemptId/\_temporary/}
 are deleted.
 \end{enumerate}
@@ -676,8 +679,6 @@ through the Hadoop APIs.
 Again, it co-ordinates the commit operation between its drivers and executors
 \footnote{Spark actually provides a hidden option to disable this
 coordination\ \cite{SPARK-8029}; it is not clear if and how this is used.}.
-
-
 
 % ========================================================================
 
