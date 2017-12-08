@@ -49,7 +49,7 @@ else abort
   Executor -> "Task Committer": abortTask()
   Executor <-- "Task Committer": aborted task
 end
-Executor -> Driver : done
+Executor -> Driver : task commit/abort completed
 Executor -> Executor: exit!
 Executor -> "YARN NodeManager": (exited)
 "YARN NodeManager" -> "YARN ResourceManager": process exited
