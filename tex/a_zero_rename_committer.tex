@@ -4,8 +4,11 @@
 \usepackage{graphicx}
 \usepackage{color}
 \usepackage{cite}
-\usepackage{algpseudocode}
+\usepackage{algorithmic}
+%\usepackage{algorithmicx}
 \usepackage{listings}
+%\usepackage{minted}
+\usepackage{underscore}
 
 % ========================================================================
 
@@ -108,7 +111,7 @@ of a worker to become completed work, simply by moving all the output to a well 
 And, when the job completes, its final output may be renamed to a new location to become
 publicly visible.
 
-As covered in\ \cite{Dean_2004_MSD_1251254_1251264}:
+As covered in\ \cite{MapReduce}:
 
 \begin{quote}
 We rely on the atomic rename operation provided by the underlying file system
@@ -169,7 +172,6 @@ to the final output of a job.
 
 
 \textbf{Job Driver}.
-
 Whatever process schedules
 task execution, tracks success/failures and, determines when all the work has been
 processed and then commits the output.
@@ -181,7 +183,6 @@ places (e.g Livy?).
 
 
 \textbf{Executor}.
-
 A process capable of executing work, as directed by the Job Driver.
 In Hadoop, a unique
 
@@ -234,23 +235,23 @@ Its requirements include the following:
 
 \begin{enumerate}
 
-\item Support thousands to tens of thousands of invidually scheduled $tasks$
-within a single $job$.
+  \item Support thousands to tens of thousands of invidually scheduled $tasks$
+  within a single $job$.
 
-\item Support different destinations of work, such as filesystems and databases.
+  \item Support different destinations of work, such as filesystems and databases.
 
-\item Recover from the failure of a task attempt by rescheduling the task;
-a new task attempt may be executed anywhere within the cluster.
+  \item Recover from the failure of a task attempt by rescheduling the task;
+  a new task attempt may be executed anywhere within the cluster.
 
-\item Support speculative execution of task attempts as a means of compensating for the
-delay caused by \emph{stragglers} in the execution.
+  \item Support speculative execution of task attempts as a means of compensating for the
+  delay caused by \emph{stragglers} in the execution.
 
-\item Potentially: recover from a failure of a job attempt, using all the committed
-task output from the previous, failed attempt.
+  \item Potentially: recover from a failure of a job attempt, using all the committed
+  task output from the previous, failed attempt.
 
-\item Be resilient to network failures/partitions of tasks, and of the job manager
-itself becoming isolated from other parts of the system (and hence: a second
-attempt at the job being started).
+  \item Be resilient to network failures/partitions of tasks, and of the job manager
+  itself becoming isolated from other parts of the system (and hence: a second
+  attempt at the job being started).
 
 \end{enumerate}
 
@@ -357,7 +358,7 @@ faster "V2" algorithm.
 Task commit promotes work to a job attempt directory;
 job commit promotes this to the destination.
 A restarted job can enumerate all work (atomically)
-committed by tasks and re-use this output.
+committed by tasks and reuse this output.
 
 \textbf{V2.}
 Tasks commit their output direct to the destination directory.
@@ -385,6 +386,7 @@ the entire job.
 
 
 \subsection{Hadoop V1 commit algorithm}
+\label{subsec:hadoopV1CommitAlgorithm}
 
 
 \emph{This will all go to a better pseudocode listing;
@@ -396,37 +398,57 @@ This creates the path \emph{jobAttemptPath}, under the
 directory \texttt{\_temporary} of the destination directory
 \emph{destPath}.
 
-\begin{lstlisting}[language=Python]
-  jobAttemptPath = destPath + "/\_temporary/" + jobAttemptId
-  fs.mkdir(jobAttemptPath)
-\end{lstlisting}
+\begin{algorithmic}
+  \STATE $jobAttemptPath \leftarrow \$destPath/$\_$temporary/\$jobAttemptId$
+  $fs.mkdir(jobAttemptPath)$
+\end{algorithmic}
 
-As all paths starting with ``\_'' are considered
+Note Hadoop has a convention that all paths starting with ``\_'' are not considered
+``visible'';
+everything under this directory is excluded from normal
+listings of the destination path.
+
 
 \textbf{Task Setup}
 
+The task attempt is given
+
+\begin{algorithmic}
+  \STATE $taskAttemptPath \leftarrow \$jobAttemptPath/\$taskAttemptId$
+\end{algorithmic}
+
 None: directories are created on demand.
+
+
+\textbf{Needs Task Commit}
+
+The commit is required iff data was generated
+
+\begin{algorithmic}
+  \RETURN $fs.exists(taskAttemptPath)$
+\end{algorithmic}
+
+This is a common place where listing inconsistencies will surface.
 
 
 \textbf{Task Commit}
 
 Rename task attempt path to task committed path.
 
-The commit is required iff data was generated
 
-\begin{lstlisting}[language=Python]
-def needsTaskCommit(fs, jobAttemptPath, taskAttemptPath, dest):
-  return fs.exists(taskAttemptPath)
-\end{lstlisting}
+%\begin{lstlisting}[language=Python]
+%def commitTask(fs, jobAttemptPath, taskAttemptPath, dest):
+%  if fs.exists(taskAttemptPath) :
+%    fs.delete(taskCommittedPath, recursive=True)
+%    fs.rename(taskAttemptPath, taskCommittedPath)
+%\end{lstlisting}
 
-This is a common place where listing inconsistencies will surface.
-
-\begin{lstlisting}[language=Python]
-def commitTask(fs, jobAttemptPath, taskAttemptPath, dest):
-  if fs.exists(taskAttemptPath) :
-    fs.delete(taskCommittedPath, recursive=True)
-    fs.rename(taskAttemptPath, taskCommittedPath)
-\end{lstlisting}
+\begin{algorithmic}
+  \IF (fs.exists(taskAttemptPath))
+  $fs.delete(taskCommittedPath, recursive=True)$
+  $fs.rename(taskAttemptPath, taskCommittedPath)$
+  \ENDIF
+\end{algorithmic}
 
 In a file system, this is an $O(1)$ atomic operation.
 Even if the task fails to report to the Job Driver that the
@@ -472,39 +494,42 @@ def commitJob(fs, jobAttemptDir, dest):
   fs.touch("\$dest/\_SUCCESS")
 \end{lstlisting}
 
-\textbf{`mergePathsV1(FileSystem fs, FileStatus src, Path dest)` Algorithm}
+\textbf{\texttt{mergePathsV1(FileSystem fs, FileStatus src, Path dest)} Algorithm}
 
-\begin{lstlisting}[language=Python]
-def mergePathsV1(fs, src, dest) :
-  if fs.exists(dest) :
-    toStat = fs.getFileStatus(dest)
-  else:
-    toStat = None
+\begin{algorithmic}
+\IF ($fs.exists(dest)$)
+  \STATE $toStat \Leftarrow fs.getFileStatus(dest)$
+\ELSE
+  \STATE $toStat \Leftarrow None$
+\ENDIF
 
-  if src.isFile :
-    if not toStat is None :
-      fs.delete(dest, recursive = True)
-    fs.rename(src.getPath, dest)
-  else :
-    # source is directory, choose action on source type
-    if src.isDirectory :
-      if not toStat is None :
-        if not toStat.isDirectory :
-          # Destination exists and is not a directory
-          fs.delete(dest)
-          fs.rename(src.getPath(), dest)
-        else :
-          # Destination exists and is a directory
-          # merge all children under destination directory
-          for child in fs.listStatus(src.getPath) :
-          mergePathsV1(fs, child, dest + child.getName)
-    else :
-      # destination does not exist
-      fs.rename(src.getPath(), dest)
-\end{lstlisting}
+\IF ($src.isFile$)
+  \IF ($not toStat is None$)
+    $fs.delete(dest, recursive = True)$
+  \ENDIF
+  $fs.rename(src.getPath, dest)$
+\ELSE
+  \IF ($src.isDirectory$)
+    \IF ($not toStat is None$)
+      \IF ($not toStat.isDirectory$)
+        $fs.delete(dest)$
+        $fs.rename(src.getPath(), dest)$
+      \ELSE
+        \FOR $\all c \in fs.listStatus(src.getPath)$
+          $mergePathsV1(fs, child, dest + c.getName)$
+        \ENDFOR
+      \ENDIF
+    \ENDIF
+  \ENDIF
+\ELSE
+  $fs.rename(src.getPath(), dest)$
+\ENDIF
+
+\end{algorithmic}
 
 
 All the files and directories are promoted to the destination directory.
+
 \begin{enumerate}
   \item If the calculated destination path of a source file or directory does
   not exist, the source files/directory renamed.
@@ -886,7 +911,7 @@ Alternatively: performance is observable, whereas consistency and failures
 are not considered important until they surface in production systems.
 
 IBM stocator eliminates renames by also having a direct write to the
-destination\ \cite{DBLP_journals_corr_abs-1709-01812}.
+destination\ \cite{Stocator}.
 As with the \emph{the Magic Committer}, it modifies the semantics of write
 operations into the temporary directories of work, here the standard
 \texttt{\_temporary} directory used by the classic \texttt{FileOutputCommitter}.
