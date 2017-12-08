@@ -4,8 +4,9 @@
 \usepackage{graphicx}
 \usepackage{color}
 \usepackage{cite}
-\usepackage{algorithmic}
+%\usepackage{algorithmic}
 %\usepackage{algorithmicx}
+\usepackage[ruled,vlined]{algorithm2e}
 \usepackage{listings}
 %\usepackage{minted}
 \usepackage{underscore}
@@ -437,20 +438,23 @@ This is a common place where listing inconsistencies will surface.
 
 Rename task attempt path to task committed path.
 
+\begin{algorithm}[H]
+%\SetAlgoLined
+\SetKwData{fs}{fs}
+\SetKwData{taskCommittedPath}{taskCommittedPath}
+\SetKwData{taskAttemptPath}{taskAttemptPath}
+\SetKwFunction{exists}{exists}
+\SetKwFunction{delete}{delete}
+\SetKwFunction{rename}{rename}
+%\KwResult{how to write algorithm with \LaTeX2e }
+initialization\;
+\If{\exists($fs$, $taskAttemptPath$)}{
+\delete($fs$, $taskCommittedPath$, $recursive$)\;
+\rename($fs$, $taskAttemptPath$, $taskCommittedPath$) \;
+}
+\caption{commitTask()}
+\end{algorithm}
 
-%\begin{lstlisting}[language=Python]
-%def commitTask(fs, jobAttemptPath, taskAttemptPath, dest):
-%  if fs.exists(taskAttemptPath) :
-%    fs.delete(taskCommittedPath, recursive=True)
-%    fs.rename(taskAttemptPath, taskCommittedPath)
-%\end{lstlisting}
-
-\begin{algorithmic}
-  \IF (fs.exists(taskAttemptPath))
-  $fs.delete(taskCommittedPath, recursive=True)$
-  $fs.rename(taskAttemptPath, taskCommittedPath)$
-  \ENDIF
-\end{algorithmic}
 
 In a file system, this is an $O(1)$ atomic operation.
 Even if the task fails to report to the Job Driver that the
@@ -473,14 +477,19 @@ final path.
 
 Delete task attempt path.
 
-\begin{lstlisting}[language=Python]
-def abortTask(fs, jobAttemptPath, taskAttemptPath, dest):
-  fs.delete(taskAttemptPath, recursive=True)
-\end{lstlisting}
+\begin{algorithm}[H]
+%  \SetAlgoLined
+  \SetKwFunction{exists}{exists}
+  \SetKwFunction{delete}{delete}
+  \SetKwFunction{rename}{rename}
+  %\KwResult{how to write algorithm with \LaTeX2e }
+  \delete($fs$, $taskAttemptPath$, $recursive$)\;
+  \caption{abortTask()}
+\end{algorithm}
 
-On a genuine fileystem this is an `O(1)` operation.
-On an object store,
-proportional to the time to list and delete files, usually in batches.
+
+On a genuine fileystem this is an $O(1)$` operation.
+On an object store, usually $O(files)$.
 
 
 \textbf{Job Commit}
@@ -489,49 +498,64 @@ Merge all files/directories in all task commited paths into final destination pa
 Optionally;
 create 0-byte `\_SUCCESS` file in the destination directory.
 
-\begin{lstlisting}[language=Python]
-def commitJob(fs, jobAttemptDir, dest):
-  for committedTask in fs.listFiles(jobAttemptDir):
-    mergePathsV1(fs, committedTask, dest)
-  fs.touch("\$dest/\_SUCCESS")
-\end{lstlisting}
+\begin{procedure*}[H]
+  %  \SetAlgoLined
+  \caption{$commitJob(fs, jobAttemptDir, dest)$}
+  \SetKwFunction{delete}{delete}
+  \SetKwFunction{exists}{exists}
+  \SetKwFunction{getFileStatus}{getFileStatus}
+  \SetKwFunction{isDirectory}{isDirectory}
+  \SetKwFunction{listFiles}{listFiles}
+  \SetKwFunction{mergePaths}{mergePathsV1}
+  \SetKwFunction{mkdirs}{mkdirs}
+  \SetKwFunction{rename}{rename}
+  \SetKwFunction{touch}{touch}
+  \SetKwFunction{commitJob}{commitJob}
+  %\KwResult{how to write algorithm with \LaTeX2e }
+  \For {$committedTask \in$ listFiles(fs, jobAttemptDir)} {
+    \mergePaths(fs, committedTask, dest)\;
+  }
+  \touch(fs, $\$dest/$\_$SUCCESS$)\;
+\end{procedure*}
 
-\textbf{\texttt{mergePathsV1(FileSystem fs, FileStatus src, Path dest)} Algorithm}
-
-\begin{algorithm*}
-\caption{V1 algorithm}
+% ------------------------------------------------------------
+\begin{procedure*}[H]
 \label{alg:commitv1}
-\begin{algorithmic}
-\IF ($fs.exists(dest)$)
-  \STATE $toStat \Leftarrow fs.getFileStatus(dest)$
-\ELSE
-  \STATE $toStat \Leftarrow None$
-\ENDIF
+\caption{$mergePathsV1(fs, rc, dest)$}
+\SetKwFunction{delete}{delete}
+\SetKwFunction{exists}{exists}
+\SetKwFunction{getFileStatus}{getFileStatus}
+\SetKwFunction{isDirectory}{isDirectory}
+\SetKwFunction{isFile}{isFile}
+\SetKwFunction{listFiles}{listFiles}
+\SetKwFunction{mergePaths}{mergePathsV1}
+\SetKwFunction{mkdirs}{mkdirs}
+\SetKwFunction{rename}{rename}
+\SetKwFunction{touch}{touch}
+\SetKwFunction{commitJob}{commitJob}
 
-\IF ($src.isFile$)
-  \IF ($not toStat is None$)
-    \STATE $fs.delete(dest, recursive = True)$
-  \ENDIF
-  \STATE $fs.rename(src.getPath, dest)$
-\ELSE
-  \IF ($src.isDirectory$)
-    \IF ($not toStat is None$)
-      \IF ($not toStat.isDirectory$)
-        \STATE $fs.delete(dest)$
-        \STATE $fs.rename(src.getPath(), dest)$
-      \ELSE
-        \FOR $\all c \in fs.listStatus(src.getPath)$
-          \STATE $mergePathsV1(fs, child, dest + c.getName)$
-        \ENDFOR
-      \ENDIF
-    \ENDIF
-  \ENDIF
-\ELSE
-  \STATE $fs.rename(src.getPath(), dest)$
-\ENDIF
+\eIf {\isFile(fs, src)} {
+  \If {\exists(fs, dest)} {
+    \delete(fs, dest, recursive)\;
+  }
+  \rename(fs, src, dest)\;
+} {
+  \eIf {\exists(fs, dest)} {
+    \eIf {\isFile(fs, dest)} {
+      \delete(fs, dest, recursive)\;
+      \rename(fs, src, dest)\;
+    } {
+      \For {c $\leftarrow$ \listFiles(fs, src)} {
+       \mergePaths(fs, child, dest + c.name)\;
+      }
+    }
+  }{
+   \rename(fs, src, dest)\;
+  }
+}
 
-\end{algorithmic}
-\end{algorithm*}
+\end{procedure*}
+% ------------------------------------------------------------
 
 All the files and directories are promoted to the destination directory.
 
