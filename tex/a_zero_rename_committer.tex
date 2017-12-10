@@ -294,7 +294,7 @@ If not, the job must be restartable from the beginning.
 \end{figure*}
 
 An UML sequence diagram of the core commit protocol is
-show in \ref{fig:commit-protocol}.
+show in\ \ref{fig:commit-protocol}.
 
 The commit algorithm is designed to work on the YARN cluster scheduler
 \ \cite{Vavilapalli2013}.
@@ -598,22 +598,17 @@ A failure in the job commit requires
 the entire job to be executed so as to recover from the failure.
 
 
-\textbf{Job Abort}
-
-Delete all data under job attempt path.
-
 \begin{procedure}
 \caption{$abortJob()$}
   \delete(fs, jobAttemptDir, recursive)\;
 \end{procedure}
 
-\textbf{Job Cleanup}
+Delete all data under job attempt path.
 
 \begin{procedure}
 \caption{$cleanupJob()$}
-\delete(fs, '\$dest/\_temporary', recursive)
+  \delete(fs, '\$dest/\_temporary', recursive)
 \end{procedure}
-
 
 \textbf{Job Recovery}
 
@@ -763,29 +758,208 @@ The factory design eliminated these risk at the expense of complicating
 Spark/Parquet integration.
 
 
-One question which arose in this integration was \emph{how can you tell if it worked?}.
 
-This is done through testing: unit tests of the underlying IO operations,
-invocations of the commit protocols in the normal and failing sequences,
-then small queries executed on the local system.
-The Spark tests were derived from the existing suites of Spark SQL tests,
-thus demonstrating consistent behaviour in test scope.
+
+% ========================================================================
+\section{Correctness}\label{sec:correctness}
+
+Do the two variant algorithms *work*?
+
+
+\subsubsection{Requirements of a valid commit algorithm}
+
+First, a definition of correct behavior must be defined.
+
+\begin{paragraph}
+  \textbf{Completeness of output.}\\
+  After a job has successfully returned from an invocation of \texttt{commitJob()},
+  the destination directory tree will contain all files written under the output directory
+  of all task attempts which successfully returned from an invocation of \texttt{commitTask()}.
+  The contents of these files will contain exactly the data written by the user code.
+  \emph{``You get what was committed''}
+\end{paragraph}
+
+\begin{paragraph}
+  \textbf{Exclusivity of output.}\\
+  After a job has successfully returned from an invocation of \texttt{commitJob()},
+  the destination directory tree will contain *no* files written under the output directory
+  of any task attempt which were not committed, or did not return from an invocation of \texttt{commitTask()}
+  \emph{``And not what wasn't''}
+\end{paragraph}
+
+\begin{paragraph}
+  \textbf{Continuity of correctness.}\\
+  After a job has been successfully committed, no outstanding task may promote
+  output into the destination directory.
+  That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
+  its output will not contaminate the directory of the already-successfull job.
+  \emph{``A dead task stays dead''}
+\end{paragraph}
+
+\begin{paragraph}
+  \textbf{Ability to abort safely.}\\
+  If job attempt is aborted before \texttt{commitJob()}, is invoked, and
+  \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
+  destination directory at any point in the future.
+  \emph{``A cleanup up job is cleaned up''}
+\end{paragraph}
+
+
+The continuity of correctness requirement exludes that of a failed job.
+We depend here upon the restriction that job will not commit its work unless
+a heartbeat has been received in a predefined time interval from the YARN ResourceManager.
+Assuming all clocks move forward at approximatly the same rate, if a job has
+not committed nor received/responded to heartbeats outside that interval,
+we can can conclude that the process will no longer commit work.
+This failure to respond to heartbeats is what triggers YARN rescheduling a new
+instance of the Job Manager and an attempt to kill the previous attempt.
+A second Job attempt may conclude from the very fact that it has been launched
+that the previous job attempt will not attempt to commit its work.
+
+
+Not considered requirements are the following constrants:
+
+\begin{itemize}
+  \item The output of committed tasks not being present in the destination directory
+  until the job is committed.
+  Rationale: The v2 commit algorithm does not meet this requirement.
+
+  \item That the task commit operation is atomic.
+  Rationale: The v2 commit algorithm does not meet this requirement.
+
+  \item That the job commit operation is atomic.
+  Rationale: The v1 commit algorithm does not meet this requirement.
+
+\end{itemize}
+
+Having these as non requirements significantly simplifies implementations,
+and allows for many different destinations of committed output to be supported.
+
+The implication of not requiring these constraints is that the higher-level
+commit protocol must react to failures or timeouts of the task and job
+commit operations.
+Nonatomic task attempt commit failures by failing the job. (v2)
+Nonatomic job attempt commit failure by failing the job (v1).
+
+
+We do attempt provide a formal proof of the correctness of the algorithms.
+A TLA+ specification of the behavior of a consistent object store was created
+during the process, however we have not completed that with the algorithm specifications.
+Modelling an eventually consistent somewhat is somewhat challenging.
+
+Informally, here is our assertions about the correctness of the two algorithms
+
+\subsubsection{Correctness of the Staging Committer}
+
+All task attempt output is written to the local filesystem;
+it is implicity not in the destination object store until task commit.
+
+In task commit, the contents of the local attempt directory are uploaded to the
+destination, as incomplete uploads.
+Hence: not visible until an operation completes the multipart upload.
+
+The list of operations to complete is saved to the cluster filesystem, where
+the V1 commit algorithm is used to commit this file.
+The semantics of the V1 commit algorithm are used to guarantee that only
+committed task attempt's output is promoted to the dataset of committed task
+data, for the final job commit.
+
+In the job commit, the V1 commit algorithm is used to commit that work, producing
+a destination directory in the cluster filesystem listing all files generated
+by committed task.
+These are files containing the lists of pending commits.
+As the V1 algorithm satisfies the completeness and exclusivity requirements,
+we can be confident that reading in these lists will build an aggregate list
+of files to commit, a list which is, transitively, complete and exclusive.
+
+The final actions of the staging committer is to complete these uploads,
+then cancel all other multipart uploads pending against the directory tree.
+This will cancel the pending work of all tasks tasks which have uploaded staged
+data, but which were not included in the list of committed tasks.
+
+We can guarantee that neither this output *nor* that of any partitioned
+task still uploading data, because that output will not be included in the
+list of files promoted by the (now-completed) v1 commit process.
+
+\subsubsection{Correctness of the Magic Committer}
+
+This is harder to demonstrate, and depends on consistent directory
+listings of the object stores, that is: all files created under a path
+in the object store are visible to the LIST operation.
+For Amazon S3, this requires a consistency layer, such as Semper or S3Guard
+\ \cite{semper, S3Guard}.
+The Magic committer was written and tested with the expecation that S3Guard
+provides this.
+
+All task attempt output is written to the object store, to the final (calculated)
+destination.
+However, they are not made visible until the job is committed.
+
+The requirements of completeness and exclusivity must be met by
+having the lists of pending uploads generated by committed task attempts propagated
+to the Job Commit phase, and the list of pending uploads from uncommitted
+attempts not propagated to the Job Commit.
+
+\emph{TODO: HADOOP-15107}
+
+
+
+\subsection{testing}\label{subsec:testing}
+
+
+
+Confidence in the correctness of the algorithms notwithstanding, there
+is still the issue of the correctness of the implementation.
+
+
+This was done through testing:
+
+\begin{enumerate}
+  \item Functional tests of the underlying IO operations against Amazon S3.
+  \item Item tests of the commit operation against a mock S3 service endpoint.
+  \item Invocations of the commit protocols in the normal and failing sequences of operations.
+  \item Integration tests on a single host MapReduce cluster.
+  \item Single-host integration tests of Spark integration, tests derived from Spark's own SQL test suites.
+  \item Large scale integration tests in virtual test clusters.
+  \item Peer review.
+\end{enumerate}
+
 To aid in demonstrating resilience to delayed consistency in object listing
 operations and transient network failures, Hadoop's \texttt{hadoop-aws} module
 now contains a special fault-injecting S3 connector: heavy throttling and
 delayed consistency can both be simulated in the downstream tests, so
 increasing confidence.
-Larger integration test are in our organizations, so validating functionality
-with production-scale workloads.
-Again, fault injection can be enabled for extra stress.
-We note that this testing is does not prove the committers' correctness,
-merely demonstrate that they comply with the protocols' requirements in
-the presence of some simulated failure modes.
 
+The large-scale integration tests have not, at the time of writing, highlighted any problems;
+the simpler test suites were co-developed with the code, and exposing issues and
+being expanded as new issues were discovered.
+One bug the integration tests did show that our committers' cleanup code was
+over-aggressive in listing and cancelling all outstanding uploads pending
+on the destination directory.
 
+The \texttt{cleanupJob()} procedure used the existing S3A client command
+\texttt{listMultipartUploads(directory)} to enumerate the updates,
+which were then cancelled.
+A detailed review of this code while trying to identify an intermittent problem
+made clear that this existing routine had a long standing bug in it.
+Rather than just list all uploads under a directory, it also included
+all uploads in directories whose paths began with the same string.
+That is, listing and cancelling pending work in the directory \texttt{/output/dataset1},
+would also delete the output in \texttt{/output/dataset10}, \texttt{/output/dataset11/work},
+...etc.
+We are fortunate that this was found before the product shipped.
+This does, however highlight our implementation's dependencies on the correctness
+of the existing software, and how hard it is to imagine test cases which
+can demonstrate the existence of bugs.
+Who would have expected a test running in \texttt{/output/dataset1} to
+cause an independent test in \texttt{/output/dataset10} iff the two tests
+executions overlapped, and the first test executed is \texttt{cleanupJob()}
+operation when the second had committed at least one task but not committed
+the final job?
 
 
 % ========================================================================
+
 \section{Results}
 \label{sec:results}
 
@@ -834,7 +1008,7 @@ This is again a few hundred milliseconds per file, though parallelization
 can reduce the delay.
 
 Ignoring throttling, the magic committer is best with tasks which create
-large amounts of data
+large amounts of data.
 As well as avoiding the upload in the task commit, by reducing the
 amount of storage needed in the virtual machine, VM and Container instances
 with smaller amounts of storage can be request, or simply more tasks executed
@@ -994,6 +1168,12 @@ speculative or restarted task attempts.
 
 Stocator also writes to the destination directory, but by renaming the output
 files retains the ability to clean up the output of uncommitted tasks.
+It does however, fail to meet our requirement ``Continuity of correctness.''
+
+A task which is still in progress after the job commit will generate output
+into the destination directory.
+
+
 Neither committer is performing any operation in task commit other than creating
 a \texttt{\_SUCCESS} marker, which is both atomic and repeatable.
 
@@ -1044,7 +1224,10 @@ later it included the filesystem statistics of the process, so helping
 collect data on IO costs.
 
 Provided all relevant applications aggree to use a single, shared manifest
-format, it may be possible to
+format, it may be possible to move to a simpler structure of
+output being written straight to the destination, and the atomic PUT of the
+manifest defining the output.
+
 
 \section{Conclusions and Further Work}
 \label{sec:conclusions}
