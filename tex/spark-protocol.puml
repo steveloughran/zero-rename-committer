@@ -16,6 +16,16 @@ Driver -> "Job Committer": setupJob()
 Driver -> Executor: execute work
 Executor -> "Task Committer": setupTask()
 Executor --> Operation: execute
+Executor <-- Operation: newTaskTempFile
+Executor -> "Task Committer": newTaskTempFile
+Executor <-- "Task Committer": tempFile
+Executor --> Operation: tempFile
+
+Executor <-- Operation: newTaskTempFileAbsPath
+Executor -> "Task Committer": newTaskTempFileAbsPath
+Executor <-- "Task Committer": tempFileAbsPath
+Executor --> Operation: tempFileAbsPath
+
 Executor <-- Operation: finished
 
 Executor -> Driver: can commit?
@@ -27,25 +37,21 @@ alt commit
     alt needs task commit
     Executor -> Driver: commitPending
     Executor -> "Task Committer": commitTask()
-    Executor <-- "Task Committer": committed task
+    Executor <-- "Task Committer": committed task+ TaskCommitMessage
+    Executor -> Driver : done + TaskCommitMessage
     end
 
 else abort
   Executor -> "Task Committer": abortTask()
   Executor <-- "Task Committer": aborted task
-end
-Executor -> Driver : done
-
-alt done-not-received-in time interval
-  Driver -> "Job Committer": cleanupTask()
-  Driver -> Driver: reschedule task
+  Executor -> Driver : done
 end
 
 
 == Job Commit==
 
 
-Driver -> "Job Committer": commitJob()
+Driver -> "Job Committer": commitJob(Set[TaskCommitMessage])
 Driver <-- "Job Committer": committed job
 Driver -> "Job Committer": cleanupJob()
 

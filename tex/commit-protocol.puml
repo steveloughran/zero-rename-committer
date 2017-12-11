@@ -1,7 +1,7 @@
 @startuml
 
 'define icons
-control Driver
+control "Job Manager"
 participant "Job Committer"
 control Executor
 participant "Task Committer"
@@ -12,35 +12,38 @@ control "YARN ResourceManager"
 ' protocol
 '== Initialization ==
 
-Driver -> "Job Committer": setupJob()
+"Job Manager" -> "Job Committer": setupJob()
 
 == For Each Task Attempt ==
-Driver -> Executor: execute work
+"Job Manager" -> Executor: execute work
 Executor -> "Task Committer": setupTask()
-Executor --> Operation: map/reduce
+Executor -> "Task Committer": getWorkPath()
+Executor <-- "Task Committer": taskAttemptDirectory
+Executor --> Operation: map/reduce + taskAttemptDirectory
+
 loop Until execution is complete...
-  Executor -> Driver : ping?
-  Driver -> Executor : task is known
+  Executor -> "Job Manager" : ping?
+  "Job Manager" -> Executor : task is known
   alt task is unknown/timeout/limits-exceeded
     Executor -> Executor: exit!
     Executor -> "YARN NodeManager": (exited)
     "YARN NodeManager" -> "YARN ResourceManager": process exited
   end
-    Driver -> "YARN ResourceManager": heartbeat request
-    Driver <-- "YARN ResourceManager": heartbeat response [exited tasks]*
+    "Job Manager" -> "YARN ResourceManager": heartbeat request
+    "Job Manager" <-- "YARN ResourceManager": heartbeat response [exited tasks]*
 end
 Executor <-- Operation: map/reduce finished
 
 'TODO: MR failure
 
-Executor -> Driver: can commit?
-Executor <-- Driver:  <commit | abort>
+Executor -> "Job Manager": can commit?
+Executor <-- "Job Manager":  <commit | abort>
 
 alt commit
   Executor -> "Task Committer": needsTaskCommit()?
   Executor <-- "Task Committer": <true | false>
     alt needs task commit
-    Executor -> Driver: commitPending
+    Executor -> "Job Manager": commitPending
     Executor -> "Task Committer": commitTask()
     Executor <-- "Task Committer": committed task
     end
@@ -49,28 +52,28 @@ else abort
   Executor -> "Task Committer": abortTask()
   Executor <-- "Task Committer": aborted task
 end
-Executor -> Driver : task commit/abort completed
+Executor -> "Job Manager" : task commit/abort completed
 Executor -> Executor: exit!
 Executor -> "YARN NodeManager": (exited)
 "YARN NodeManager" -> "YARN ResourceManager": process exited
 
 alt done-not-received-in time interval
-  Driver -> "Job Committer": cleanupTask()
-  Driver -> Driver: reschedule task
+  "Job Manager" -> "Job Committer": cleanupTask()
+  "Job Manager" -> "Job Manager": reschedule task
 end
 
 
 == Job Commit==
 
-Driver -> "YARN ResourceManager": heartbeat request
-Driver <-- "YARN ResourceManager": heartbeat response [exited tasks]*
+"Job Manager" -> "YARN ResourceManager": heartbeat request
+"Job Manager" <-- "YARN ResourceManager": heartbeat response [exited tasks]*
 
-Driver -> "Job Committer": commitJob()
-Driver <-- "Job Committer": committed job
-Driver -> "Job Committer": cleanupJob()
-Driver -> "YARN ResourceManager": finished
-Driver -> Driver: exit!
-Driver -> "YARN NodeManager": (exited)
+"Job Manager" -> "Job Committer": commitJob()
+"Job Manager" <-- "Job Committer": committed job
+"Job Manager" -> "Job Committer": cleanupJob()
+"Job Manager" -> "YARN ResourceManager": finished
+"Job Manager" -> "Job Manager": exit!
+"Job Manager" -> "YARN NodeManager": (exited)
 "YARN NodeManager" -> "YARN ResourceManager": process exited
 
 
