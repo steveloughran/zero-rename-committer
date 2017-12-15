@@ -36,23 +36,23 @@ Executor <-- Operation: map/reduce finished
 
 'TODO: MR failure
 
-Executor -> "Job Manager": can commit?
-Executor <-- "Job Manager":  <commit | abort>
+Executor -> "Task Committer": needsTaskCommit()?
+Executor <-- "Task Committer": <true | false>
 
-alt commit
-  Executor -> "Task Committer": needsTaskCommit()?
-  Executor <-- "Task Committer": <true | false>
-    alt needs task commit
+
+alt needs task commit
+  Executor -> "Job Manager": can commit?
+  Executor <-- "Job Manager":  <commit | abort>
+  alt action = commit
     Executor -> "Job Manager": commitPending
     Executor -> "Task Committer": commitTask()
     Executor <-- "Task Committer": committed task
-    end
-
-else abort
-  Executor -> "Task Committer": abortTask()
-  Executor <-- "Task Committer": aborted task
+  else action = abort
+    Executor -> "Task Committer": abortTask()
+    Executor <-- "Task Committer": aborted task
+  end
 end
-Executor -> "Job Manager" : task commit/abort completed
+Executor -> "Job Manager" : done
 Executor -> Executor: exit!
 Executor -> "YARN NodeManager": (exited)
 "YARN NodeManager" -> "YARN ResourceManager": process exited

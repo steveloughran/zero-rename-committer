@@ -28,7 +28,7 @@
 
 \title{
 A Zero-Rename Committer:\\
-Object-storage as a destination for Apache Hadoop and Spark}
+Object-storage as a Destination for Apache Hadoop and Spark}
 
 % Yes, this titling is broken
 \author{
@@ -125,7 +125,7 @@ of a worker to become completed work, simply by moving all the output to a well 
 And, when the job completes, its final output may be renamed to a new location to become
 publicly visible.
 
-As covered in\ \cite{MapReduce}:
+As covered in the original MapReduce paper\ \cite{MapReduce}:
 
 \begin{quote}
 We rely on the atomic rename operation provided by the underlying file system
@@ -134,7 +134,8 @@ by one execution of the reduce task.
 \end{quote}
 
 
-Apache Hadoop was written with its own filesystem, Hadoop Distributed File System (HDFS).
+Apache Hadoop was written with its own filesystem, Hadoop Distributed File System
+(HDFS)\ \cite{Chansler2011}.
 
 It is self-admittedly ``sub-POSIX'', specifically, while presenting the POSIX
 model of a filesystem tree containing directories and files, data can only be
@@ -209,7 +210,7 @@ An instance of the class \texttt{org.apache.hadoop.mapreduce.JobContext},
 which provides a read-only view of the Job for the Job Driver and tasks.
 
 \textbf{Task Attempt Context}.
-an instance of the class
+An instance of the class
 \texttt{org.apache.hadoop.mapreduce.TaskAttemptContext},
 which provides operations for tasks, such as getting and setting status,
 progress and counter values.
@@ -396,6 +397,37 @@ the entire job.
   \label{tab:file-committer-attributes}
 \end{table}
 
+\subsection{Common Variables}
+\label{subsec:commonVariables}
+
+
+\begin{table}
+  \caption{Variables used in the algorithms}
+  \begin{tabular}{ l c c }
+    \hline
+    & \textbf{v1} & \textbf{v2} \\
+    $jobId$ & Numeric Job ID $\geq$ 0; no uniqueness guarantee \\
+    $jobAttemptId$ & $JobID_\$counter$; counter starts at 0 for a job and increments on each attempt.\\
+    $partId$ & numeric value of partition of data to be allocated to a task.\\
+    $taskId$ & $jobAttemptId_\$partId$; the task which works on part $partId$ in the job attempt.\\
+    $taskAttemptId$ & $taskId\$counter$; a single attempt to execute a task.\\
+    \hline
+  \end{tabular}
+  \label{tab:variables}
+\end{table}
+
+For a Job attempt $jobAttemptId$ to be successful, all parts of the dataset
+must be succesfully processed in tasks.
+The output of exactly one task attempt must be in the final dataset,
+
+The problem of the commit algorithms, then, is to guarantee that this condition
+is met, even in the presence of failures.
+It is not a requirement for the algorithms to be able to recover from all
+failures;
+they may react to some failure conditions by failing the entire job.
+
+It is also not a general requirement that if a job fails, the destination directory
+is unchanged.
 
 \subsection{Hadoop V1 commit algorithm}
 \label{subsec:hadoopV1CommitAlgorithm}
@@ -847,26 +879,49 @@ Spark uses the Hadoop Committers within its commit protocol when
 writing data to filesystems, but it is not restricted to only committing work
 through the Hadoop APIs.
 
-Again, it co-ordinates the commit operation between its drivers and executors
-\footnote{Spark actually provides a hidden option to disable this
-coordination\ \cite{SPARK-8029}; it is not clear if and how this is used.}.
+It manages the requirement of ``only one task attempt may commit'' in it's
+\texttt{OutputCommitCoordinator} class;
+an instance of this in the driver tracks the state of all active task attempts
+and grants or denies permission to commit.
+
+A task attempt is only granted permission to commit if three conditions
+are met
+\begin{enumerate}
+  \item The task attempt is not recorded as having failed
+  \item The task attempt is in the set of known-to-be active tasks
+  \item Either no task attempt has been granted permission to commit, or
+  the requesting task attempt has already been granted this permission.
+\end{enumerate}
+
+That is: it must be a valid task attempt and no other task attempt is
+committing the work.
+
+The Executor requests this permission to commit via an RPC call and will
+proceed with the commit when it receives a successful message.
+A timeout on the RPC channel or a denial of commit permission will result
+in \texttt{abortTask()} being invoked.
+
+Once a task attempt has been granted permission to commit, then no conflicting
+attempt will be granted unless the first attempt is reported as having failed.
+
+\TODO: \texttt{OutputCommitCoordinator} reacts to task events from the scheduler, but
+does that cover executor failure?
 
 Spark makes no attempt to recover from a failed job driver;
 its mechanism for recovering from a failed job os "rerun the entire query".
 What it does do is move the communication between operation and committer
 from one of invoking the operation with an output directory to
 that of permitting the operation to indirectly ask for a temporary file
-and *a temporary file with a known destination*.
+and \emph{temporary file with a known destination}.
 
-The simple temporary file operation, \texttt{newTaskTempFile()} is used
+The standard temporary file operation, \texttt{newTaskTempFile()} is used
 to request a temporary file.
-The name of a file is constructed so as to match the final filename;
-the committer which uses the Hadoop \texttt{FileOutputCommitter} places this
-file in the task attempt directory.
-As a result, the written file is committed through the same v1 or v2 algorithms
-as with Hadoop.
+The name of a file is constructed in the Spark committer so as to match the final filename;
+the path will be under the task attempt directory.
+As a result, the written file is committed through the Hadoop commit operations,
+which are relayed by the Spark committer.
 
-The \texttt{newTaskTempFileAbsPath()} is a new operation.
+The \texttt{newTaskTempFileAbsPath()} is an operation unique to Spark.
 This is needed to address the special case of Apache Hive, wherein
 some parts of the data set are written to different locations than
 under the destination directory of a job.
@@ -900,29 +955,72 @@ Accordingly, our new committers do not support this operation
 \footnote{It is possible to support this, but it would complicate cleaning up
 after tasks, especially failed ones, and failed jobs.}.
 
+It's notable here that Spark is more flexible in its commit protocol, because
+the name for a file is generated by the committer, not the application,
+and because successful task committers can pass arbitrary serialized data back
+to the driver, for use in the Job Commit operation.
+This could potentially be used as the sole mechanism for passing a list
+of written files from the task attempts to the job committer.
+Being able to generate names (albeit while preserving a sort order), could
+also be potentially useful.
+We have initially chosen to not explore this as a commitment strategy;
+others may wish to.
+
 
 % ========================================================================
 
 \section{The Challenge of Object Stores}
 \label{sec:object-stores}
 
-
-\TODO: introduce object stores.
+Having introduced the classic filesystem and the commit protocols and algorithms
+used to commit the output of distributed computation, let us consider
+Object Stores such as Amazon S3, Google Cloud Storage and
+Windows Azure Storage\ \cite{AWS-S3-intro,Calder11}.
 
 % As all filesystem
 %operations are via the NameNode, all clients get a consistent view of the filesystem.
 %And, as the
 
 
-Object stores do not generally offer the full semantics of a filesystem.
-Generally the set of operations available are an extended set of HTTP verbs:
+The most salient point, is this: Object Stores are not filesystems.
+Rather than the classic hierarchical view of directories, subdirectories
+and paths, object stores store a set of objects, each with a unique key;
+a sequence of characters provided when the object was created.
+Classic path separators ``\texttt{/}'' are invariably part of the set of valid
+characters, so allowing objects to be created which have the appearance
+of files in a directory.
 
-\begin{description}[leftmargin=8em,style=nextline]
+As examples, the following are all valid keys on the Amazon, Google and Microsoft
+stores
+
+\begin{verbatim}
+  /entry
+  /path1/path2/path3
+  /path1/
+  /path1
+\end{verbatim}
+
+More subtly, it is valid for an object store container (on S3: ``bucket'')
+to have objects with all of these names simultanously.
+It is not an error to have an object whose key would make it appear to be
+``under'' another object, nor to explicitly contain path entries separators.
+
+Objects cannot generally be appended to once created, or renamed.
+They can be replaced by new objects or deleted.
+Some form of copy operation permits an object to be duplicated, creating
+a new object with a different key.
+Such copy operations take place within the storage infrastructure with a
+copy time measureable in megabytes/second.
+
+
+The set of operations offered are normally an extended set of HTTP verbs:
+
+\begin{description}[leftmargin=8em, style=nextline]
   \item[PUT] Atomic write of an object
   \item[GET] retrieve all or part of an object
   \item[HEAD] retrieve the object metadata
   \item[LIST] list all objects starting with a given prefix
-  \item[COPY] copy a single object within the store
+  \item[COPY] copy a single object within the store, possibly from other containers.
   \item[DELETE] Delete an object
 \end{description}
 
@@ -936,13 +1034,112 @@ etags of the uploaded object parts.
 All but the last upload in the object must be 5 MB or larger
 
 
-Object stores which lack an atomic $O(1)$ \texttt{rename()} operation cannot
-be safely used as the direct destination of work from Apache Hadoop MapReduce
-or Apache Spark, due to the existing ``Committer''s dependency upon rename for
-atomic commit operations.
-If the object store is eventually consistent, then even mimicing the \texttt{rename()}
-operation is at risk of losing data.
-Thus it is neither fast nor reliable.
+Object store implementations can display different levels of inconsistency.
+Windows Azure Storage is fully consistent;
+Amazon S3 offers create consistency on new objects, but not updated or deleted ones.
+It also exhibits listing inconsistency, wherein a newly created object
+may not be visible in the results of a \texttt{LIST} call, or a newly deleted
+object still be listed as present.
+
+
+Despite the clear mismatch between the capabilites and APIs of object storage,
+and that expected of a Hadoop filesystem, they have one key thing in common:
+they can store petabytes of data.
+For that reason, all the popular cloud storage infrastructures have connectors
+from Hadoop, and thus transitively application such as Apache Hive, Apache HBase
+and Apache Spark.
+Many of these are developed within the Apache Software Foundation's own
+souce repository, including the Azure "wasb" connector and the "s3a" connector
+to Amazon S3.
+Others are maintained externally ---particularly Amazon EMR's own ``EMRFS'',
+known by the \texttt{s3} URL schema, and the Google Cloud Storage connector,
+\texttt{gcs}.
+
+Irrespective of where they are implemented, they all share a common objective:
+trying to maintain the filesystem metaphor atop an object store.
+
+As an example of a simple case, the \texttt{getFileStatus()} call mimics
+a directory, in conjunction with zero-byte "empty directory" markers,
+so must look for a file, then a marker and the most expensive operation, a path listing.
+
+\begin{verbatim}
+  GET path
+  GET path/
+  LIST path/
+\end{verbatim}
+
+The performance differences of every HTTPS request slow
+down all RPC operations, even with pooled collections: even this simple probe
+can take hundreds of milliseconds.
+Other mimiced operations have similar costs.
+
+Operations opon directories are mimiced by listing all objects under that path,
+and acting upon those objects individually.
+A recursive delete is implemented as a listing of the maximum number of files
+returned in one HTTP request (5000 or a similar value), then either issuing
+bulk DELETE operations, where supported, or falling back to individual DELETE
+calls.
+Bulk LIST/DELETE operations have a cost of one HTTP request/page size, such
+as O(1 + descendents/5000); if sequential delete operations must be issued, then
+the cost is at least O(1+ descendents), with the ``at least'' qualifier being
+added because request throttling can slow down the requests even further.
+
+File and directory renaming is even more expensive.
+A file rename is implemented as a copy of the original data to a new path,
+followed by a delete of the original data.
+This makes the time to copy single file an $O(length(file)$ operation.
+
+Directory rename is a paged listing of all children, and a copy and delete for
+each, which is $O(files *length(file)$.
+
+These are the tangible performance issues, the ones which are most visible
+to users.
+However it is the fact that the atomicity behaviors of a POSIX filesystem
+which are most dangerous.
+
+The \texttt{rename()} call is no longer atomic: two clients may start renaming
+into to the same destination directory.
+Furthermore, if any rename fails, the state of the source and destination
+directory is unknown: the data may be spread across both locations.
+Finally, because the files to be copied is determined from a LIST call,
+if the object store is not consistent, the listing can be incomplete or out of
+date.
+Newly created files may not be visible, so not copied as part of the rename
+operation.
+
+\emph{Directory rename cannot be used in a commit algorithm which
+requires atomic, exclusive or consistent renames}.
+
+The \texttt{create(path, overwrite=false)} operation is also flawed.
+This is expected to be an atomic operation to immediately create a file iff there is
+no entry at that path;
+Instead it is mimiced by a sequence of the  \texttt{getFileStatus()} call
+and the creation of a buffer on the client side for the output: the data
+will not be PUT/manifest until the data is completely written and the stream
+closed.
+As a result, it is impossible to use file creation as a means of creating any
+form of lock or exclusive access.
+
+
+Returning to the V1 and V2 commit algorithms, they are unsuitable for
+use in any object store without atomic renames (v1) and consistent
+directory listings  and existence checks (v1 and v2).
+
+As a result, neither can be used directly against Amazon S3 today.
+With a consistent metadata layer such as S3mper or S3Guard, the V2 algorithm
+can be used, albeit slow.
+
+Providing a safe, performant output committer for object stores forces
+us to leave the metaphor of a filesystem behind, and embrace
+the capabilites of object stores themselves.
+
+% ========================================================================
+
+
+\TODO: specify the new algorithms
+
+
+
 
 % ========================================================================
 \section{Integration with Hadoop and Spark}
@@ -1057,19 +1254,39 @@ First, a definition of correct behavior must be defined.
   output into the destination directory.
   That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
   its output will not contaminate the directory of the already-successfull job.
-  \emph{``A dead task stays dead''}
+  \emph{``A dead task attempt stays dead''}
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Ability to abort safely.}\\
-  If job attempt is aborted before \texttt{commitJob()}, is invoked, and
-  \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
-  destination directory at any point in the future.
-  \emph{``A cleanup up job is cleaned up''}
+  \textbf{Consistency of the commit.}\\
+  The task or job must be able to reliably commit the work, even in the presence
+  of inconsistent listings.
+  This could be addressed, for example, by using a consistent store for some operations,
+  or a manifest mechanism and a reliance on create consistency.
+  Consistency with subsequent queries in a workflow is encouraged, else a ``sufficient''
+  delay is needed for the listings to become consistent.
+  \emph{``Addresses S3 consistencies, somehow''}
 \end{paragraph}
 
 
-The continuity of correctness requirement exludes that of a failed job.
+\begin{paragraph}
+  \textbf{Concurrent.}\\
+  Multiple tasks in the same job must be able to commit concurrently.
+  A job must be able to commit its work while other jobs are committing
+  their work \emph{to different destinations in the store}.
+\end{paragraph}
+
+
+\begin{paragraph}
+  \textbf{Ability to abort.}\\
+  If a job attempt is aborted before \texttt{commitJob()}, is invoked, and
+  \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
+  destination directory at any point in the future.
+  \emph{``A cleaned up job no longer exists''}
+\end{paragraph}
+
+
+The continuity-of-correctness requirement exludes that of a failed job.
 We depend here upon the restriction that job will not commit its work unless
 a heartbeat has been received in a predefined time interval from the YARN ResourceManager.
 Assuming all clocks move forward at approximatly the same rate, if a job has
@@ -1111,7 +1328,8 @@ A TLA+ specification of the behavior of a consistent object store was created
 during the process, however we have not completed that with the algorithm specifications.
 Modelling an eventually consistent somewhat is somewhat challenging.
 
-Informally, here is our assertions about the correctness of the two algorithms
+In the absence of proofs,
+here are our informal assertions about the correctness of the two algorithms
 
 \subsubsection{Correctness of the Staging Committer}
 
@@ -1151,7 +1369,7 @@ This is harder to demonstrate, and depends on consistent directory
 listings of the object stores, that is: all files created under a path
 in the object store are visible to the LIST operation.
 For Amazon S3, this requires a consistency layer, such as Semper or S3Guard
-\ \cite{semper, S3Guard}.
+\ \cite{Semper,HADOOP-13345}.
 The Magic committer was written and tested with the expecation that S3Guard
 provides this.
 
@@ -1170,21 +1388,19 @@ wherein a task partitioned from the Job Manager during commitTask
 (this considered failed and reattempted),
 can still complete it's PUT of its list of uploads to commit, the ``pending set'',
 overwriting that of the task attempt which had considered itself successful.
-We cannot defense against that with the traditional strategy of creating
+We cannot defend against that with the traditional strategy of creating
 a file with overwrite=false, because against S3, there is no atomic
 "create-no-overwrite" operation.
 Instead we rely on the requirement of work, that any committed task attempt must
-constitute a valid outcome, and argue that the pending set still constitues a valid
-result from a task attempt.
+constitute a valid outcome, and argue that the pending set from either attempt
+must constitue a valid result of a task.
 
 It's notable that this process could be improved were the job commit
-operation to supplied with a list of successful task attempts;
+operation supplied with a list of successful task attempts;
 this would avoid inferring this state from the filesystem, except in
 the case of job recovery from a commit algorithm capable of
-rebuilding its state from a directory listing (i.e\ the v1 committer).
-
-
-\TODO: HADOOP-15107
+rebuilding its state from a directory listing (i.e.\ the v1 committer).
+Spark's protocol already permits this, but not Hadoop's.
 
 Regarding the requirement to abort safely, the fact that all writes are
 not manifest until job commit means that the any writes from failed tasks
@@ -1213,7 +1429,7 @@ This was done through testing:
 
 \begin{enumerate}
   \item Functional tests of the underlying IO operations against Amazon S3.
-  \item Item tests of the commit operation against a mock S3 service endpoint.
+  \item Tests of the commit operation against a mock S3 service endpoint.
   \item Invocations of the commit protocols in the normal and failing sequences of operations.
   \item Integration tests on a single host MapReduce cluster.
   \item Single-host integration tests of Spark integration, tests derived from Spark's own SQL test suites.
@@ -1349,7 +1565,10 @@ it is $O(files)$ operation which may fail partway through.
 We respond that as Hadoop's MapReduce V1 commit algorithm it itself non-atomic in job commit;
 the job manager commit algorithm is designed to detect failures in job commits
 of previous attempts, and either recover or fail, according to the actions
-offered by the committer
+offered by the committer.
+A more subtle issue is the volume of POST requests required of a significantly large job,
+all against a specific shard of the S3 store can trigger HTTP throttling.
+This reduces the benefit of parallelized issuing of the POST requests.
 
 A task process may exit without \texttt{abortTask()} being invoked.
 Specifically, it exit immediately during the ping/response
@@ -1450,10 +1669,14 @@ Job commit is a listing of the output and generation of the manifest;
 as the manifest PUT is atomic, the job commit itself is atomic.
 
 What is critical for stocator is that the output of all failed tasks
-is cleaned up, which is done in \emph{WHAT?}
-This cannot be guaranteed in the failure case of: partitioned task
-completing its commit after the job commit.
-Thus our requirement "continuity of correctness" is not met.
+is cleaned up, \TODO \emph{WHERE?}.
+This cannot be guaranteed in the failure case of: partitioned task attempt
+continues to execute and write new files.
+When that task attempt attempts to commit, it will fail to be granted permission,
+and presumably clean up.
+\TODO: verify commit $\rightarrow$ fail triggers cleanup
+Before that commit and cleanup phase, the destination directory will contain
+data from the ongoing, uncommitted task.
 
 The closest of the two S3A committers is the magic committer.
 It too mosified the filesystem connctor to write the output to a
@@ -1581,7 +1804,7 @@ the multipart PUT with its ability to complete the upload from a different host-
 alow for object-store aware commit algorithms to be implemented,
 algorithms which do meet these requirements.
 
-The new Committers are implemented in Apache Hadoop 3.1, with a small bridging
+The new committers are implemented in Apache Hadoop 3.1, with a small bridging
 library to aid integration with Apache Spark\ \cite{HADOOP-13786}.
 We await the bug reports providing us with real-world deployment experiences
 with excitement and trepidation.
@@ -1642,6 +1865,11 @@ their use.
 
 \section*{Acknowledgements}
 \label{sec:acknowledgements}
+
+We are grateful for the contributions of all reviewers and testers, especially
+Aaron Fabbri, Thomas Demoor and Ewan Higgs.
+We must also highlight the contributions of our QE teams: it is through
+their work that this work is ready for others to use.
 
 % ========================================================================
 

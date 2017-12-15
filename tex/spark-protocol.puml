@@ -16,42 +16,38 @@ Driver -> "Job Committer": setupJob()
 Driver -> Executor: execute work
 Executor -> "Task Committer": setupTask()
 Executor --> Operation: execute
-Executor <-- Operation: newTaskTempFile
-Executor -> "Task Committer": newTaskTempFile
-Executor <-- "Task Committer": tempFile
-Executor --> Operation: tempFile
+"Task Committer" <-- Operation: newTaskTempFile
+"Task Committer" --> Operation: tempFile
 
-Executor <-- Operation: newTaskTempFileAbsPath
-Executor -> "Task Committer": newTaskTempFileAbsPath
-Executor <-- "Task Committer": tempFileAbsPath
-Executor --> Operation: tempFileAbsPath
+"Task Committer" <-- Operation: newTaskTempFileAbsPath
+"Task Committer" --> Operation: tempFileAbsPath
 
 Executor <-- Operation: finished
 
-Executor -> Driver: can commit?
-Executor <-- Driver:  <commit | abort>
+' now look at the commit protocol
+Executor -> "Task Committer": needsTaskCommit()?
+Executor <-- "Task Committer": <true | false>
 
-alt commit
-  Executor -> "Task Committer": needsTaskCommit()?
-  Executor <-- "Task Committer": <true | false>
-    alt needs task commit
-    Executor -> Driver: commitPending
+alt needsTaskCommit == true
+  Executor -> "Driver": AskPermissionToCommitOutput
+  alt permission to commit granted
     Executor -> "Task Committer": commitTask()
-    Executor <-- "Task Committer": committed task+ TaskCommitMessage
-    Executor -> Driver : done + TaskCommitMessage
-    end
-
-else abort
+    Executor <-- "Task Committer": TaskCommitMessage
+    Executor -> Driver : Success + TaskCommitMessage
+  else
+    Executor -> Driver : TaskCommitDenied
+  end
+else needsTaskCommit == false
   Executor -> "Task Committer": abortTask()
   Executor <-- "Task Committer": aborted task
-  Executor -> Driver : done
+  Executor -> Driver : Success
 end
 
 
 == Job Commit==
 
 
-Driver -> "Job Committer": commitJob(Set[TaskCommitMessage])
+Driver -> "Job Committer": commitJob(TaskCommitMessage+)
 Driver <-- "Job Committer": committed job
 Driver -> "Job Committer": cleanupJob()
 
