@@ -248,6 +248,9 @@ Its requirements include the following:
 
 \begin{enumerate}
 
+  \item ``Correctly'' propagate the output of individual tasks to the final
+  aggregate of the job.
+  What constitutes correctness is covered in \ref{sec:correctness}.
   \item Support thousands to tens of thousands of invidually scheduled $tasks$
   within a single $job$.
 
@@ -842,6 +845,40 @@ Nor is it possible to recover from the failure of a job other than by deleting
 the destination directory and re-executing the entire job.
 
 
+\subsubsection{Weaknesses of the Hadoop MapReduce commit algorithm}
+
+Alongside some implementation details, such as the fact that a task process
+will executed without calling cleanupTask() once it is informed that it
+is unknown, we have to consider: are there any fundamental issues with
+the protocol?
+
+A key weakness is that the job committer is not passed the list of task
+attempts considered successful, and, from those committed tasks, their
+lists of files which were committed.
+
+The committers themselves have to implement some mechanism;
+the file committers do this through the filesystem, relying on consistent
+metadata listings to enumerate task output to merge, and, for the v1 committer,
+to enumerate the set of successful tasks whose output must be merged.
+This places a requirement for the filesystem metadata listings to be consistent,
+a requirement met by POSIX-class filesytems, but not object stores.
+
+Even with consistent with filesystems, the fact no direct list
+of completed tasks is passed to the commitJob operation means that it is
+not easy for the committer to determine whether the listing of tasks obtained
+from the filesystem is complete.
+If any generated files or directories were deleted between the completion
+of a task and the job commit operation, this loss would be detected
+Were to the Job Manager to pass its lists of completed tasks, distinguishing
+those which generated data (i.e.\ requested permission to commit), from those
+that did not, then output committers would have the ability to verify that
+the committed tasks did generate output, while the uncommitted attempts did not.
+This would aid validating committer implementations against their dependencies
+---such as the consistency of a filesystem.
+As it is, there is currently no way to guarantee that an inconsistent directory
+listing will be detected.
+
+
 
 % ========================================================================
 
@@ -965,6 +1002,49 @@ Being able to generate names (albeit while preserving a sort order), could
 also be potentially useful.
 We have initially chosen to not explore this as a commitment strategy;
 others may wish to.
+
+
+
+\subsubsection{Weaknesses of the Spark commit algorithm}
+
+The standard commit coordination in the Job Driver is with the
+\texttt{OutputCommitCoordinator}.
+this class's state includes tracking whether or not a task attempt
+has been granted permission to commit its work.
+Once one task attempt has been granted permission to commit,
+all other task attempts for the same task will be denied.
+However, if the task attempt granted permission to commit its work fails
+for any reason, the attempt is considered a failure, and
+another attempt will be granted permission to commit its work.
+
+This strategy works, provided task commit is a repeatable operation,
+even if the first attempt has failed or become partitioned from the
+Job Driver.
+That requirement is met for the v1 File Output Commit algorithm, but not
+by the v2 algorithm, or, potentially, others.
+If committers could declare their abilit to recover from
+failed task commits, along with other aspects of their operation,
+the \texttt{OutputCommitCoordinator} would be able to decide whether
+a repeated attempt were permitted, or whether failing the Job was the
+safer outcome.
+
+
+Unlike the Hadoop algorithm, there is no requirement for the Job Driver
+to have received a recent liveness check from the cluster scheduler.
+Unless the Job Driver process exits once it determines that it has been
+isolated from any underlying cluster scheduler, there is a risk that
+a partitioned Spark cluster may commit a job to the same destination
+as a cluster instantiated as a replacement.
+Careful review of the YARN and Mesos integration code is required to be
+confident that this risk does not exist.
+
+The Spark commit algorithm does permit task committers to return data to
+the job committer;
+it should be possible to use this to validate the output of the tasks.
+The current committer implementations do not do this, but at least the underlying
+protocol makes such an improvement possible.
+
+
 
 
 % ========================================================================
@@ -1121,7 +1201,7 @@ As a result, it is impossible to use file creation as a means of creating any
 form of lock or exclusive access.
 
 
-Returning to the V1 and V2 commit algorithms, they are unsuitable for
+Returning to the MapReduce v1 and v2 commit algorithms, they are unsuitable for
 use in any object store without atomic renames (v1) and consistent
 directory listings  and existence checks (v1 and v2).
 
@@ -1135,8 +1215,89 @@ the capabilites of object stores themselves.
 
 % ========================================================================
 
+\section{The new S3A Committers: working with S3 from the outset}.
 
-\TODO: specify the new algorithms
+Given that the filesystem metaphor is not viable, how can work safely
+use S3 as a destination of work.
+
+This is the problem solved by the new ``S3A committers'' so called as they
+are designed to integrate with Hadoop's S3A connector to S3.
+This connector was modified to offer access to an S3-specific operation:
+multipart upload (MPU).
+
+This the operation is already used for writing large files to the object store.
+When a file is written, it is initially buffered to disk or memory, when it
+reaches a configured threshold the upload is initiated, and first block uploaded
+in a \texttt{POST} operation.
+When that POST operation is finished, S3 returns an MD5-checksum of the
+uploaded data, the ``entity tag'', as used in existing HTTP operations.
+After all the blocks of a stream have been uploaded, the ordered list
+of entity tags is POSTed to S3 in a final request completing the MPU.
+It is only after this final POST that the uploaded object is manfest in S3.
+If this final POST operation can be used to commit the output of a task,
+then the committer has atomic and effectively O(1) operation for each file.
+
+The challenge for an S3 committer then becomes one of: how to have
+user code write to the destination directory, preserving and propagating
+the lists of MPUs to finally commit in the job commit operation?
+
+That is the challenge addressed in the two committers.
+
+Underneath, they both use the same methods offered by the S3A connector,
+and the same persistent data formats to propagate the lists of pending uploads.
+Where they differ is how tasks write data, and how the lists are passed
+to the job committer.
+
+The ``Staging Commiter'' has each task attempt stage its data into the local
+filesystem of the server on which the attempt is executed.
+When a task attempt is committed, its data is uploaded to the final
+paths on S3.
+The manifest of the pending MPUs is passed to the job tracker via
+a shared consitent cluster filesystem (usually HDFS), \emph{using the v1
+File Output Commit} commit algorith.
+Thus the semantics of the v1 algorithm: atomic task attempt commit, are also
+made available to the staging commmitter.
+When the job is committed, Staging committer first commits the manifests
+within the HDFS cluster, then reads in the final manifests, and completes
+the multipart uploads.
+All the data is uploaded to its final destination in the task commit, with the
+job commit being the time to execute the v1 commit operation within HDFS, followed
+by that of a POST call per uploaded file.
+
+
+The ``Magic Committer'' works within the S3A filesystem connector, changing
+how files are incrementally written to S3.
+Rather than completing a multipart upload when the output stream being written
+by a task is closed, in the process doing the writing, the magic
+committer delays the final POST until the job is committed.
+Instead it writes a manifest describing the upload to S3.
+When the task is committed, all the single file manifests of that attempt
+are aggregated into a single manifest for the task attempt, which is then
+PUT to S3 in the directory of completed tasks.
+The Job commit process is one of reading in the manifests of all committed
+tasks, and as with the Staging Committer, completing their uploads.
+
+Because of it support for incremental writes, the magic committer promises
+faster uploads of larger datasets: there is no need to postpone the upload
+to S3 until the task is actually committed.
+However, it has two requirements.
+Firstly, it needs consistent metadata listings of the object store, which
+is provided by the S3Guard extension to S3A\ \cite{S3Guard}.
+This uses Amazon's DynamoDB database for the consistent metadata view.
+The second problem is: how to determine when a client wants to initiate
+a delayed-visibility write operation?
+Whenever a file is written to a directory under the path \texttt{__magic},
+it is considered to be a delayed write operation.
+Accordingly, an MPU is initiated to
+path calculated above the the \texttt{__magic} directory, and only the initial
+manifest PUT under the \texttt{__magic} path, where it is then used in the
+task- and job-commit operations.
+Hence ``magic'' adjective: it modifies the filesystem so the files written
+only appear when the job is committed, in a different location.
+
+
+
+
 
 
 
@@ -1249,15 +1410,6 @@ First, a definition of correct behavior must be defined.
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Continuity of correctness.}\\
-  After a job has been successfully committed, no outstanding task may promote
-  output into the destination directory.
-  That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
-  its output will not contaminate the directory of the already-successfull job.
-  \emph{``A dead task attempt stays dead''}
-\end{paragraph}
-
-\begin{paragraph}
   \textbf{Consistency of the commit.}\\
   The task or job must be able to reliably commit the work, even in the presence
   of inconsistent listings.
@@ -1268,7 +1420,6 @@ First, a definition of correct behavior must be defined.
   \emph{``Addresses S3 consistencies, somehow''}
 \end{paragraph}
 
-
 \begin{paragraph}
   \textbf{Concurrent.}\\
   Multiple tasks in the same job must be able to commit concurrently.
@@ -1276,13 +1427,22 @@ First, a definition of correct behavior must be defined.
   their work \emph{to different destinations in the store}.
 \end{paragraph}
 
-
 \begin{paragraph}
   \textbf{Ability to abort.}\\
   If a job attempt is aborted before \texttt{commitJob()}, is invoked, and
   \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
   destination directory at any point in the future.
   \emph{``A cleaned up job no longer exists''}
+\end{paragraph}
+
+
+\begin{paragraph}
+  \textbf{Continuity of correctness.}\\
+  After a job has been successfully committed, no outstanding task may promote
+  output into the destination directory.
+  That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
+  its output will not contaminate the directory of the already-successfull job.
+  \emph{``A dead task attempt stays dead''}
 \end{paragraph}
 
 
@@ -1323,7 +1483,7 @@ Nonatomic task attempt commit failures by failing the job. (v2)
 Nonatomic job attempt commit failure by failing the job (v1).
 
 
-We do attempt provide a formal proof of the correctness of the algorithms.
+We do not attempt provide a formal proof of the correctness of the algorithms.
 A TLA+ specification of the behavior of a consistent object store was created
 during the process, however we have not completed that with the algorithm specifications.
 Modelling an eventually consistent somewhat is somewhat challenging.
@@ -1617,6 +1777,61 @@ can address this on well-configured systems\ \cite{AWS-clock-service}.
 
 
 % ========================================================================
+
+\section{Improvements to the Commit Protocols}
+\label{sec:improvementsToTheCommitProtocols}
+
+
+This work has highlighted some of the existing limitations of the commit protocols,
+specifically:-
+
+\begin{itemize}
+  \item Lack of information returned by task attemts as to what output they have committed,
+  prevents this from being validated in the job commit.
+  \item Lack of information declared by the committers as to whether they can
+  recover from a failure during the task commit.
+  \item A general expectation in the execution engines that job and task abort do
+  not fail, or at least, succeed in a bounded time and log rather than propagate
+  failures.
+\end{itemize}
+
+These can be addressed;
+the Spark commit protocol is already partway to doing so, as tasks attempts
+can propagate information to the job commit phase.
+
+We recommend extending the underlying output committers, to provide the
+information needed to enhance the protocols robustness.
+An extended  \texttt{commitTask()} operation should return the (opaque) information
+needed for the \texttt{commitJob()} method to validate the correctness and
+completeness of the operation;
+the standard committers should then validate their final output directories.
+
+Were the committers also declare their ability to recover from a failed task commit,
+as they do for job recovery, then query engines would be able to choose the safe
+actions following the failure/timeout of a task attempt commit.
+
+We should also have the object store connectors declare their consistency policy,
+so have the file committers fail fast when executed against an inconsistent store.
+This can be implemented at the filesystem and committer layers.
+
+As for the task abort issues;
+that can be addressed with a straightforward hardening of the abort operations,
+\emph{and} their use.
+
+Finally, the committers and the underlying storage infrastructures are instrumented;
+they can and collect statistics about their operations, information
+which can be useful in identify performance and scale problems.
+Again, this could be propagated back from the committers to to the
+query engine.
+Our new committers do collect this information, and aggregated it in the
+job commit process, but only to publish it in the \texttt{_SUCCESS} file;
+it is not integrated with the applications themselves.
+
+All these problems are tractable, and will improve confidence in the ability
+of the query engines to safely interact with alternate data stores and
+commit algorithms written to work with them.
+
+
 
 \section{Related Work}
 \label{sec:relatedWork}
