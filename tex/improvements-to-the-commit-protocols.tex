@@ -1,0 +1,77 @@
+\documentclass{article}
+% ========================================================================
+\begin{document}
+
+What can be done for improving commit operations
+
+\section{Hadoop}\label{sec:hadoop}
+
+Add check for dest dir existing before job setup?
+Currently there's a window between job submit and OutputCommitter.setupJob()
+where no attempt to create the dest dir exists.
+
+The *first* attempt could reject if the dest dir is there;
+later ones should expect it.
+
+\section{Spark}\label{sec:spark}
+
+Handling on task attempt commit timeout
+
+\begin{enumerate}
+  \item choose whether to commit another attempt on task commit timeout based on committer attributes.
+  \item Short term: if FileOutputCommitter, check algorithm and reject restart if v2
+  \item Long term: add predicate to PathOutputCommitter.
+\end{enumerate}
+
+Avoid duplicate job attempt commmit after a partitioned spark driver
+
+Q1: is this actually a problem on YARN?
+
+How would a test simulate this?
+
+Q2: what about on Mesos or YARN with driver running off-cluster?
+
+Q3: How to address in a infra-neutral way?
+Need to query infra for last time a heartbeat took place and wait until
+its within a time range before committing.
+
+
+\texttt{newTaskTempFileAbsPath()} is, well, trouble for the new committers.
+It could be supported in the staging committers again throue upload in task commit.
+
+For the magic committer, we could add a new prefix under \texttt{__magic},
+\texttt{__root}, alongside \texttt{__base}.
+The magic path mapping logic would then be "when writing to a magic path
+\texttt{dest/__magic/jobAttemptId/taskAttemptID/__root/abspath}, then the destination of the write
+would actually become "abspath".
+The existing commit algorithm would automatically incorporate the .pending files
+created in the write, and so commit them along with the relative paths.
+There is one sole complication: with the writes scattered through the S3 bucket,
+a full cleanup would require listing and aborting all outstanding MPUs
+writes throughout the bucket.
+This could not be done without breaking all other active jobs writing to
+the same bucket.
+
+
+
+\section{Statistic collection}
+
+A long term fix woud be to radically improve the means by which statistics are
+collected by tasks and then aggregated in the job committer.
+The latest versions of the HDFS and object store connectors are heavily instrumented,
+collecting lots of information on filesystem client use.
+for S3A this includes: times an HTTP1.1 connection was aborted on a file read,
+the number of times a S3 request was throttled and retried,
+even some latency statistics.
+All of these would be useful if they could be collected by the job, aggregated
+appropriately, and included in the job execution history.
+It is possible to collect this information, and then pass this back.
+Indeed, our committers do collect this data themselves, saving it in the
+manifest files listing pending uploads, combinining this into the \SUCCESS file
+in job commit.
+This data is not yet extracted by the job committer and returned to the execution
+environment.
+This can be fixed.
+
+
+\end{document}
