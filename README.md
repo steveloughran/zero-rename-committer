@@ -1,4 +1,4 @@
-# zA Zero-Rename Committer: Object-storage as a destination for Apache Hadoop and Spark
+# A Zero-Rename Committer: Object-storage as a destination for Apache Hadoop and Spark
 
 This is a LaTeX formatted paper on the new S3A committers coming in Hadoop 3.1.
 
