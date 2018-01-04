@@ -73,5 +73,25 @@ This data is not yet extracted by the job committer and returned to the executio
 environment.
 This can be fixed.
 
+\section{Committer Capabilities}
+
+Committers should be able to declare that they have certain attributes, such
+as repeatable task commit operations (currently only job commit is declared).
+
+Rather than propose a continually growing list of predicates, we'd argue for
+implementing the \texttt{org.apache.hadoop.fs.StreamCapabilities} interface
+and its \texttt{boolean hasCapability(String capability)} predicate, with capabilities
+chosen so that the default return value, false, is the pessimistic outcome.
+By reusing the capabilities probe already built into Hadoop 2.9+, it's  easier
+to adopt the checks.
+
+
+
+\section{More tests}
+
+
+Make sure that an empty directory can still be committed & generates
+an empty pendingset  file, and that when loaded, its harmless.
+
 
 \end{document}

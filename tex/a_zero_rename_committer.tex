@@ -6,7 +6,7 @@
 \usepackage{cite}
 %\usepackage{algorithmic}
 %\usepackage{algorithmicx}
-\usepackage[ruled,vlined]{algorithm2e}
+\usepackage[ruled,vlined,boxed]{algorithm2e}
 \usepackage{listings}
 %\usepackage{minted}
 \usepackage{underscore}
@@ -31,7 +31,7 @@
 
 \title{
 A Zero-Rename Committer:\\
-Object-storage as a Destination for Apache Hadoop and Spark}
+Object-storage as a Destination\\ for Apache Hadoop and Spark}
 
 % Yes, this titling is broken
 \author{
@@ -108,7 +108,7 @@ forcing the persistence formats to rely purely on appending data,
 
 What has been a critical part of the required semantics has been that the filesystem
 presents a model of directories and files with consistent operations to list and
-read those directories and their contents, and at least four atomic operations:
+read those directories and their contents, with at least four atomic operations:
 
 \begin{itemize}
   \item Rename of a single file to another location within the same volume.
@@ -117,7 +117,7 @@ read those directories and their contents, and at least four atomic operations:
   \item Recursive delete of a directory.
 \end{itemize}
 
-These operations are regulary used as the foundational operators of higher-level
+These operations are regularly used by applications as the foundational operators of higher-level
 co-ordination and commit protocols.
 
 For example, the \texttt{create()} operation can be used to obtain a lock on a resource:
@@ -145,8 +145,7 @@ Apache Hadoop was written with its own filesystem, Hadoop Distributed File Syste
 It is self-admittedly sub-POSIX, specifically, while presenting the POSIX
 model of a filesystem tree containing directories and files, data can only be
 appended directly to the end of the current file.
-That is: one my not \texttt{seek()} to before or after the end of the file and
-then write data.
+
 
 It does offer atomic operations which are used in commit protocols and other
 applications as a means of enforcing exclusivity;
@@ -173,26 +172,24 @@ or declaratively in a form such as SQL\@.
 
 
 \textbf{Job}.
-A parallelized query/operation to execute.
-
+A parallelized query/operation to execute, composed of one or more Tasks.
 The output of a Job is made visible to other stages in a larger operation
-sequence or other applications if the job \emph{completes successfully}.
+sequence or other applications iff the job \emph{completes successfully}.
 A complex query may consist of a chain of Jobs, either executing in sequence
 or as a DAG of jobs.
 
 \textbf{Job Attempt}.
-A single attempt at executing the job;
-each one executed from a new set of processes.
-Hadoop Jobs are restartable, so more than one attempt may be made;
+A single attempt at executing the job.
 
 \textbf{Task}.
-A single operation within a job, on a single process, one which generates
-one or more files.
+Part of a job, such as a single Map or Reduce transformation of a fraction
+of the input data.
 A task completes successfully if it generates all the output it expects to without
 failing in some way.
 
 \textbf{Task Attempt}.
-A single attempt to execute a task.
+A single attempt to execute a task on a single process.
+A task attempt is executed on a single host in a cluster;
 Multiple attempts may be made to execute a task;
 possibly in parallel.
 It is critical that only one task attempt's output is propagated
@@ -200,12 +197,11 @@ to the final output of a job.
 
 
 \textbf{Job Manager}.
-
-Whatever process schedules task execution, tracks success/failures,
-determines when all the work has been processed and then commits the output.
+The application which schedules task attempt execution, tracks success/failures,
+determines when a job has been successful and publishes the results.
 It may also determine that a job has failed and cannot be recovered,
 in which case the job is aborted.
-In Hadoop MapReduce and Apache Tez, this is inside the YARN application master.
+In Hadoop MapReduce and Apache Tez, this is inside the YARN Application Master.
 In Spark it is the ``Spark Driver'', which can be executed in a number of
 locations, including the same process as that in which the tasks are executed.
 
@@ -217,22 +213,12 @@ of the data, destroyed when the processing is completed.
 In Spark, executors are long lived and can be given task attempts for multiple
 jobs to execute, often simultaneously.
 
-\textbf{Destination directory}.
+\textbf{Job Output Directory}.
 The directory into which the output of a job writing to the filesystem is placed
 so as to be visible.
 After a successful job completion, the data MUST be visible in the destination
 directory.
 
-
-\textbf{Job Context}.
-An instance of the class \texttt{org.apache.hadoop.mapreduce.JobContext},
-which provides a read-only view of the Job for the Job Driver and tasks.
-
-\textbf{Task Attempt Context}.
-An instance of the class
-\texttt{org.apache.hadoop.mapreduce.TaskAttemptContext},
-which provides operations for tasks, such as getting and setting status,
-progress and counter values.
 
 \textbf{Task Working Directory}.
 A directory for exclusive access by a single task attempt, into which uncommitted
@@ -242,13 +228,13 @@ that task attempt.
 
 
 \textbf{Task Commit}.
-The act of taking the output of a task attempt ---all files under the Task Working Directory---
+The act of taking the output of a task attempt ---all files ---
 and promoting it to become part of the final output of the active job
 attempt.
-The hierarchy of directories in under the Task Working Directory must be
-preserved so that when the job attempt is committed, the task attempts' files
-will appear in equivalent subdirectories under the destination directory.
-T
+When the output is a filesystem, this consists of moving the files
+under the Task Working Directory and moving to the Job Output Directory,
+preserving any hierarchy of directories.
+
 
 \textbf{Job Commit}.
 The act of taking the output of all committed tasks of a job attempt,
@@ -265,6 +251,17 @@ To cancel a task such that its data is not committed.
 To cancel all work in a job attempt: no task's work is committed.
 
 
+\textbf{Job Context}.
+An instance of the class \texttt{org.apache.hadoop.mapreduce.JobContext},
+which provides a read-only view of the Job for the Job Driver and tasks.
+
+\textbf{Task Attempt Context}.
+An instance of the class
+\texttt{org.apache.hadoop.mapreduce.TaskAttemptContext},
+which provides operations for tasks, such as getting and setting status,
+progress and counter values.
+
+
 \subsection{Requirements of a Commitment Protocol}
 \label{subsec:requirementsOfACommitmentProtocol}
 
@@ -274,14 +271,14 @@ Its requirements include the following:
 
 \begin{enumerate}
 
-  \item ``Correctly'' propagate the output of individual tasks to the final
-  aggregate of the job.
-  What constitutes correctness is covered in \ref{sec:correctness}.
-  \item
-  \item Support thousands to tens of thousands of invidually scheduled $tasks$
+  \item Support thousands, to tens of thousands, of invidually scheduled $tasks$
   within a single $job$.
 
   \item Support different destinations of work, such as filesystems and databases.
+
+  \item ``Correctly'' propagate the output of individual tasks to the final
+  aggregate of the job.
+  What constitutes correctness is covered in \ref{sec:correctness}.
 
   \item Recover from the failure of a task attempt by rescheduling the task;
   a new task attempt may be executed anywhere within the cluster.
@@ -302,7 +299,7 @@ This leads to some specific requirements of the implementation, requirements
 which can be used to assess the correctness of the implementation.
 
 \textbf{Independent.}
-Individual tasks must be able to write their data without directly
+Individual tasks must be able to outpput without directly
 co-ordinating that write with those of other tasks.
 
 \textbf{Speculative tasks until committed.}
@@ -314,8 +311,7 @@ that is left to the implementors of the operations executed in the tasks.
 
 \textbf{Scaleable communication protocol.}
 The commit protocol communications between task and job manager
-must be efficient enough to support tens of thousands of simultaneous
-tasks.
+must be support tens of thousands of simultaneous tasks.
 
 \textbf{Abortable.}
 It must be possible to abort an uncommitted task or job.
@@ -377,7 +373,7 @@ having failed.
 This is not of direct relevance to the commit protocol except as a
 reason for a task attempt to fail.
 
-\subsubsection{Hadoop's FileOutputCommitter}
+\section{Hadoop's FileOutputCommitter}\label{sec:hadoop'sFileoutputcommitter}
 
 The operations to commit the work, the Task Commit and the Job Commit,
 are all implemented in the same class, an implementatipon of \texttt{OutputCommitter}.
@@ -393,7 +389,7 @@ job manager will fail, and hence the ability to recover from a job failure
 considered valuable.
 
 
-The two are termed the "v1" and "v2";
+The two are termed the ``v1'' and ``v2'';
 the v1 being the slower to commit but able to recover from job manager failure.
 
 
@@ -411,24 +407,24 @@ A restarted job must delete the contents of this directory and reexecute
 the entire job.
 The output of completed tasks is visible before the job is committed.
 
-\begin{table}
-  \caption{Attributes of the \texttt{FileOutputCommitter} algorithms}
-  \begin{tabular}{ l c c }
-    \hline
-    & \textbf{v1} & \textbf{v2} \\
-    Independent & True & True \\
-    Speculative Tasks & True & True \\
-    Recoverable Job & True & False \\
-    Abortable Job & True & Delete output directory \\
-    Observable & False & True \\
-    Atomic Task Commit & True & False \\
-    Idempotent Task Commit & True & False \\
-    Atomic Job Commit & False & True \\
-    Idempotent Job Commit & False & True \\
-    \hline
-  \end{tabular}
-  \label{tab:file-committer-attributes}
-\end{table}
+%\begin{table}
+%  \caption{Attributes of the \texttt{FileOutputCommitter} algorithms}
+%  \begin{tabular}{ l c c }
+%    \hline
+%    & \textbf{v1} & \textbf{v2} \\
+%    Independent & True & True \\
+%    Speculative Tasks & True & True \\
+%    Recoverable Job & True & False \\
+%    Abortable Job & True & Delete output directory \\
+%    Observable & False & True \\
+%    Atomic Task Commit & True & False \\
+%    Idempotent Task Commit & True & False \\
+%    Atomic Job Commit & False & True \\
+%    Idempotent Job Commit & False & True \\
+%    \hline
+%  \end{tabular}
+%  \label{tab:file-committer-attributes}
+%\end{table}
 
 \subsection{Common Variables}
 \label{subsec:commonVariables}
@@ -438,7 +434,9 @@ The output of completed tasks is visible before the job is committed.
   \caption{Variables used in the algorithms}
   \begin{tabular}{ l l l }
     \hline
-    & \textbf{v1} & \textbf{v2} \\
+    \textbf{name} & \textbf{meaning} \\
+
+    $destDir$ & Job Destination Directory \\
     $jobId$ & Numeric Job ID $\geq$ 0; no uniqueness guarantee \\
     $jobAttemptId$ & $JobID_\$counter$; counter starts at 0 for a job and increments on each attempt.\\
     $partId$ & numeric value of partition of data to be allocated to a task.\\
@@ -449,34 +447,39 @@ The output of completed tasks is visible before the job is committed.
   \label{tab:variables}
 \end{table}
 
-For a Job attempt $jobAttemptId$ to be successful, all parts of the dataset
+For a Job Attempt $jobAttemptId$ to be successful, all parts of the dataset
 must be succesfully processed in tasks.
 The output of exactly one task attempt must be in the final dataset,
 
-The problem of the commit algorithms, then, is to guarantee that this condition
+The task of the commit algorithms, then, is to guarantee that this condition
 is met, even in the presence of failures.
 It is not a requirement for the algorithms to be able to recover from all
 failures;
 they may react to some failure conditions by failing the entire job.
 
-It is also not a general requirement that if a job fails, the destination directory
-is unchanged.
+It is also not a general requirement that if a job fails, the job output directory
+must be unchanged.
+Together, these non requirements imply that at-most-once semantics are required,
+and that a higher-level workflow is expected to handle job failures.
 
 \subsection{Hadoop v1 commit algorithm}
 \label{subsec:hadoopV1CommitAlgorithm}
 
 \newcommand{\FileOutputCommitVars}{
 \DontPrintSemicolon
-\SetKwData{fs}{fs}
-\SetKwData{taskCommittedPath}{taskCommittedPath}
-\SetKwData{taskAttemptPath}{\$taskAttemptPath}
-\SetKwData{jobAttemptPath}{\$jobAttemptPath}
-\SetKwData{jobAttemptId}{\$jobAttemptId}
-\SetKwData{taskAttemptId}{\$taskAttemptId}
-\SetKwData{dest}{\$destDir}
-\SetKwData{temp}{\_temporary}
-\SetKwData{SUCCESS}{\_SUCCESS}
-}
+\SetKwData{fs}{$fs$}
+\SetKwData{dest}{$destDir$}
+\SetKwData{taskAttemptPath}{$taskAttemptPath$}
+\SetKwData{taskCommittedPath}{$taskCommittedPath$}
+\SetKwData{jobAttemptPath}{$jobAttemptPath$}
+\SetKwData{jobAttemptId}{$jobAttemptId$}
+\SetKwData{SUCCESS}{_$SUCCESS$}
+\SetKwData{taskAttemptId}{$taskAttemptId$}
+\SetKwData{temp}{_$temporary$}}
+
+\newcommand{\true}{ $true$ }
+\newcommand{\false}{ $false$ }
+
 
 \textbf{Job Setup}
 
@@ -487,26 +490,42 @@ directory \texttt{\_temporary} of the destination directory
 \begin{procedure}
 \FileOutputCommitVars
 % Operations, which are defined for all subsequent procedures/functions
+% ALL functions must go in here, in alphabetical order
+% Macros cannot have numbers in them, though their values can.
+\SetKwFunction{abortUpload}{abortUpload}
+\SetKwFunction{checkForConflicts}{checkForConflicts}
+\SetKwFunction{commitJob}{commitJob}
+\SetKwFunction{completeUpload}{completeUpload}
 \SetKwFunction{delete}{delete}
 \SetKwFunction{exists}{exists}
 \SetKwFunction{Exception}{Exception}
 \SetKwFunction{getFileStatus}{getFileStatus}
+\SetKwFunction{getUsername}{getUsername}
 \SetKwFunction{isDirectory}{isDirectory}
 \SetKwFunction{isFile}{isFile}
 \SetKwFunction{listFiles}{listFiles}
-\SetKwFunction{mergePathsV1}{mergePathsV1}
-\SetKwFunction{mergePathsV2}{mergePathsV2}
+\SetKwFunction{listPendingUploads}{listPendingUploads}
+\SetKwFunction{loadPendingFile}{loadPendingFile}
+\SetKwFunction{loadPendingSet}{loadPendingSet}
+\SetKwFunction{mergePathsA}{mergePathsV1}
+\SetKwFunction{mergePathsB}{mergePathsV2}
 \SetKwFunction{mkdir}{mkdir}
 \SetKwFunction{mkdirs}{mkdirs}
+\SetKwFunction{newUUID}{newUUID}
 \SetKwFunction{rename}{rename}
 \SetKwFunction{return}{return}
-\SetKwFunction{touch}{touch}
+\SetKwFunction{savePendingSet}{savePendingSet}
+\SetKwFunction{tempDirForStaging}{tempDirForStaging}
 \SetKwFunction{throw}{throw}
-\SetKwFunction{commitJob}{commitJob}
+\SetKwFunction{touch}{touch}
+\SetKwFunction{uniquePath}{uniquePath}
+\SetKwFunction{uploadFileToPendingCommit}{uploadFileToPendingCommit}
 
-  jobAttemptPath $\longleftarrow$ \dest/\temp/\jobAttemptId\;
+  \jobAttemptPath $\longleftarrow$ \dest/\temp/\jobAttemptId\;
   \mkdir(\fs, \jobAttemptPath)\;
+
 \caption{setupJob()}
+\label{FileOutputCommitter.setupJob}
 \end{procedure}
 
 Note Hadoop has a convention that all paths starting with ``\_'' are not considered
@@ -527,8 +546,9 @@ as its task working directory.
 \begin{procedure}
 \FileOutputCommitVars
 
-taskAttemptPath $\longleftarrow$ \jobAttemptPath/\taskAttemptId\;
+\taskAttemptPath $\longleftarrow$ \jobAttemptPath/\taskAttemptId\;
 \caption{setupTask()}
+\label{alg:FileOutputCommitter.setupTask}
 \end{procedure}
 
 The actual directories are created on demand.
@@ -543,6 +563,7 @@ A commit is required iff data was generated.
 
   \exists(\fs, \taskAttemptPath)\;
 \caption{needsTaskCommit()}
+\label{alg:FileOutputCommitter.needsTaskCommit}
 \end{function}
 
 This is a common place where listing inconsistencies in an object
@@ -551,20 +572,22 @@ store will generate a false negative ``no data to commit'' result.
 
 \textbf{Task Commit}
 
-Rename task attempt path to task committed path.
+A task attempt is committed simply by renaming the task attempt path
+to the task committed path.
 
 \begin{procedure}
 \FileOutputCommitVars
 
 \If{\exists(\fs, \taskAttemptPath)} {
-  \delete(\fs, \taskCommittedPath, recursive)\;
+  \delete(\fs, \taskCommittedPath, $recursive$)\;
   \rename(\fs, \taskAttemptPath, \taskCommittedPath)\;
 }
 \caption{commitTask()}
+\label{alg:FileOutputCommitter.commitTask}
 \end{procedure}
 
 
-In a file system, the rename is an $O(1)$ atomic operation.
+In a true file system, the rename is an $O(1)$ atomic operation.
 Even if the task fails to report to the Job Driver that the
 commit operation was completed, the existence of the \texttt{taskCommittedPath}
 is an implicit confirmation that the task was committed.
@@ -573,17 +596,12 @@ be taking slow to execute the operation.
 However, the Job Driver can assume that the task has failed,
 and reschedule another attempt at that task.
 Whichever of the rescheduled or original (delayed/partitioned) task
-first renames their attempt to the committed path will block the other
-from renaming its own attempt directory the same committed task path.
-
-Thus it is not merely the atomicity of the directory rename operation
-which the algorithm depends upon, it is the exclusivity.
-Only one task attempt from a set of task attempts may rename its attempt to
-final path.
+last renames their task attempt path to the task committed path is considered
+the successful committer.
 
 \textbf{Task Abort}
 
-Delete task attempt path.
+Abort a task attempt by deleting its task attempt path.
 
 \begin{procedure}
 \FileOutputCommitVars
@@ -591,7 +609,7 @@ Delete task attempt path.
   \delete(\fs, \taskAttemptPath, $recursive$)\;
 
 \caption{abortTask()}
-\label{FileOutputCommitter.abortTask}
+\label{alg:FileOutputCommitter.abortTask}
 \end{procedure}
 
 
@@ -600,21 +618,22 @@ On an object store, usually $O(files)$.
 
 \textbf{Job Commit}
 
-Merge all files/directories in all task commited paths into final destination path.
-Optionally;
-create 0-byte `\SUCCESS` file in the destination directory.
+A Job is committed by merging all files/directories in from all the task
+committed paths into final job output directory.
+
+Optionally, it can create a zero-byte `\SUCCESS` file in the output directory.
 
 \begin{procedure*}
 \FileOutputCommitVars
 
   \For {committedTask $\leftarrow$ listFiles(\fs, \jobAttemptPath)} {
-    \mergePathsV1(\fs, committedTask, \dest)\;
+    \mergePathsA(\fs, committedTask, \dest)\;
   }
   \touch(\fs, \dest/\SUCCESS)\;
   \delete(\fs, \temp)\;
 
 \caption{commitJob()}
-\label{FileOutputCommitter.commitJob}
+\label{alg:FileOutputCommitter.commitJob}
 \end{procedure*}
 
 
@@ -625,7 +644,6 @@ the destination directory.
 % ------------------------------------------------------------
 \begin{procedure*}
 \FileOutputCommitVars
-
 
 \eIf {\isFile(fs, src)} {
   \If {\exists(fs, dest)} {
@@ -639,7 +657,7 @@ the destination directory.
       \rename(fs, src, dest)\;
     } {
       \For {f $\leftarrow$ \listFiles(fs, src)} {
-       \mergePathsV1(fs, f, dest + f.name)\;
+       \mergePathsA(fs, f, dest + f.name)\;
       }
     }
   } {
@@ -684,7 +702,7 @@ be repeated.
 As a result, this algorithm declares that the commit job is not repeatable.
 
 \begin{function}
-  false\;
+  \false
 \caption{v1.isCommitJobRepeatable()}
 \label{v1.isCommitJobRepeatable}
 
@@ -696,9 +714,11 @@ job attempt directory, an $O(1)$ operation.
 % Abort Job v1
 \begin{procedure}
 \FileOutputCommitVars
-  \delete(\fs, \jobAttemptPath, recursive)\;
+
+  \delete(\fs, \jobAttemptPath, $recursive$)\;
+
 \caption{v1.abortJob()}
-\label{v1.abortJob}
+\label{alg:v1.abortJob}
 
 \end{procedure}
 
@@ -707,11 +727,14 @@ may have been made.
 This can be achieved by deleting the entire \texttt{_temporary} directory
 under the destination directory.
 
+% cleanup job v1
 \begin{procedure}
 \FileOutputCommitVars
+
   \delete(\fs, \dest/\temp, recursive)\;
+
 \caption{cleanupJob()}
-\label{cleanupJob}
+\label{alg:cleanupJob}
 \end{procedure}
 
 This would interfere with any other ongoing job which is writing to the
@@ -722,42 +745,52 @@ to a specific destination, something which is checked for during job submission.
 
 \textbf{Job Recovery}
 
-\begin{enumerate}
 
-\item Data under task committed paths of all previous attempts is moved
-into the new job attempt directory.
-\item All directories under \texttt{\$dest/\_temporary/\$appAttemptId/\_temporary/}
-are deleted.
-\end{enumerate}
 
-Uncommitted/unexecuted tasks are (re)executed.
+% This is a bit more confusing than you think, as there are some bits of code
+% which try to recover for both.
+% look at TaskImpl.recover for how recovery is kicked off
 
-This significantly improves time to recover a restarted Job.
+The V1 committer can recover from a failed job attempt, with the
+second attempt being able to reuse the output of all committed tasks from
+the previous attempt.
+
+The whole attempt recovery process is a complex one;
+from the perspective of the committer, if the task attempt was committed
+in the previous job attempt, the $taskCommittedPath$ of the previous attempt
+can be moved under the $jobAttemptPath$ of the new job attempt.
+
+
+This significantly improves time to recover a restarted job.
 The only lost work is that of all tasks in progress ---those which had generated
 data but were not yet committed.
 
-
-With the ability to recover from the failure of the entire job by
-reusing the output of previous attempts means that the jobs executed
-with this commit algorithm are resilient to failures of the job driver.
+With the ability to recover from the failure of the entire job without losing
+work means that jobs executed with this commit algorithm are
+can recover faster from a failure of the job manager.
 However, the (serialized) time to commit the job is longer, and the job
 commit cannot be recovered from.
 
-The longer the task, the higher the risk of failure, the more value there is
-in recovering the work in progress.
+The longer lasting a job, the higher the probability of the Job Manager failing,
+and the value in recovery higher.
+Thus this commit strategy is most valuable in the larger, longer, jobs.
 
 
 \subsection{Hadoop v2 commit algorithm}
 \label{subsec:hadoopV2CommitAlgorithm}
 
 
-The v2 algorithm performs the merge operation in the task commits,
-in a variant \texttt{mergePaths()} algorithm, \ref{alg:mergePathsV2}.
-Note the two mergePath algorithms are intermixed in the Hadoop source in a pair of corecursive functions;
+The v2 commit algorithm propagates the task attempts output into the job's
+output directory in the task commit.
+This is done with a in a variant \texttt{mergePaths()} algorithm, \ref{alg:mergePathsV2},
+designed to support parallel writers to the output directory.
+In the Hadoop source the two algorithms are intermixed within a pair of
+corecursive procedures;
 they have been isolated here for clarity.
 
 
 % ------------------------------------------------------------
+% V2 commit algorithm
 \begin{procedure*}
 
 
@@ -772,20 +805,21 @@ they have been isolated here for clarity.
           \delete(fs, dest, recursive)\;
           \mkdirs(fs, dest)\;
           \For {c $\leftarrow$ \listFiles(fs, src)} {
-            \mergePaths(fs, c, dest + c.name)\;
+            \mergePathsB(fs, c, dest + c.name)\;
           }
       } {
         \For {f $\leftarrow$ \listFiles(fs, src)} {
-          \mergePaths(fs, f, dest + f.name)\;
+          \mergePathsB(fs, f, dest + f.name)\;
         }
       }
     } {
       \mkdirs(fs, dest)\;
       \For {f $\leftarrow$ \listFiles(fs, src)} {
-         \mergePaths(fs, f, dest + f.name)\;
+         \mergePathsB(fs, f, dest + f.name)\;
       }
     }
   }
+
   \label{alg:mergePathsV2}
   \caption{mergePathsV2(fs, rc, dest)}
 
@@ -819,7 +853,10 @@ As most tasks are not on the critical path for job execution, however,
 this inefficiencies of the operation are likely to be offset by the
 elimination of the job commit delays.
 
-What is the Job commit procedure in the v2 algorithm?
+
+With the file propagation taking place in the tasks, the job commit
+operation is reduced to creating the \SUCCESS file and cleaning up
+working directories:
 
 
 \begin{procedure*}
@@ -827,7 +864,7 @@ What is the Job commit procedure in the v2 algorithm?
 
   \touch(\fs, \dest/\SUCCESS)\;
   \delete(\fs, \temp)\;
-\caption{v2.commitJob()}
+\caption{Updated commitJob()}
 \end{procedure*}
 
 In terms of failure resilience, the v2 algorithm is weaker than the v1 algorithm.
@@ -837,7 +874,7 @@ It is therefore not possible to recover from the failure of a task to commit.
 This also means that it it's impossible to recover from the failure of a job other
 than by deleting the destination directory and re-executing the entire job.
 
-It's sacrificed resilience for speed.
+It has sacrificed resilience for speed.
 This is often a valid decision to make, however, the callers of the committers
 need to be aware that this decision has been made, and that failures in
 certain parts of the process, specifically task commit, are not recoverable.
@@ -858,7 +895,7 @@ The committers themselves have to implement some mechanism to determine this
 of tasks.
 The file output committer does this through the filesystem, relying on consistent
 metadata listings to enumerate task output to merge, and, for the v1 committer,
-to enumerate the set of successful tasks whose output must be merged.
+to enumerate the set of committed tasks whose output must be published in job commit.
 This places a requirement for the filesystem metadata listings to be consistent,
 a requirement not met by all not object stores.
 
@@ -906,64 +943,53 @@ by the single Job Driver.
 \end{figure*}
 
 
-A failure of an executor is detected (\TODO: how?);
-all active tasks will be rescheduled.
-
+When a failure of an executor is detected (\TODO: how?); all active tasks will be rescheduled.
 As the failure may be a network partition, multiple task attempts may be active
 simultaneously.
-
-It is a requirement that no data is promoted until a task attempt is actually
+It is therefore a requirement that no data is promoted until a task attempt is actually
 committed.
 
 
-Spark can the Hadoop Committers within its commit protocol,
+Spark can use the Hadoop Committers within its commit protocol,
 which is usually done whenever writing data to HDFS or other cluster filesystem.
 
-Spark guarantees the requirement of ``only one task attempt may be commited''
+Spark manages its requirement of ``only one task attempt may be commited''
 in its \texttt{OutputCommitCoordinator} class;
 an instance of this in the driver tracks the state of all active task attempts
 and grants or denies permission to commit.
 
-A task attempt is only granted permission to commit if three conditions
-are met:
+A task attempt is only granted permission to commit iff three conditions
+are met\footnote{see: \texttt{OutputCommitCoordinator.handleAskPermissionToCommit()}}:
 
 \begin{enumerate}
-  \item The task attempt is not recorded as having failed
+  \item The task attempt is not recorded as having failed.
   \item The task attempt is in the set of known-to-be active tasks
-  \item Either no task attempt has been granted permission to commit, or
-  the requesting task attempt has already been granted this permission.
+  \item Either the requesting task attempt has already been granted this permission,
+  no task attempt has been granted permission to commit, or a previous task
+  was granted permission, but it is considered to have failed.
+
 \end{enumerate}
 
 That is: it must be a valid task attempt and no other task attempt is
-committing or has committed this task.
+actively committing or has committed this task.
 
 The Executor requests this permission to commit via an RPC call and will
 proceed with the commit when it receives a successful message.
 A timeout on the RPC channel or a denial of commit permission will result
 in \texttt{abortTask()} being invoked.
 
-Once a task attempt has been granted permission to commit, then no conflicting
+Once a task attempt has been granted permission to commit, then no other
 attempt will be granted unless the first attempt is reported as having failed.
 
 \TODO: \texttt{OutputCommitCoordinator} reacts to task events from the scheduler, but
 does that cover executor failure?
 
 Spark makes no attempt to recover from a failed job driver;
-its mechanism for recovering from a failed job is "rerun the entire query".
-What it does do is move the communication between operation and committer
-from one of invoking the operation with an output directory to
-that of permitting the operation to indirectly ask for a temporary file
-and \emph{temporary file with a known destination}.
+its mechanism for recovering from a failed job is ``rerun the entire query''.
 
-The standard temporary file operation, \texttt{newTaskTempFile()} is used
-to request a temporary file.
-The name of a file is constructed in the Spark committer so as to match the final filename;
-the path will be under the task attempt directory.
-As a result, the written file is committed through the Hadoop commit operations,
-which are relayed by the Spark committer.
-
-The \texttt{newTaskTempFileAbsPath()} is a Spark operation not currently supported by
-the Hadoop committers.
+One area where spark goes beyond Hadoop's protocol ias that
+it adds a new operation to request a file with an absolute path,
+ \texttt{newTaskTempFileAbsPath()}.
 It is needed to address the special case of Apache Hive, wherein
 some parts of the dataset are written to different locations than
 under the destination directory of a job.
@@ -975,22 +1001,22 @@ Spark implements this operation atop the standard \texttt{FileOutputCommmiter}
 as follows:
 
 \begin{enumerate}
-  \item An ``absolute path staging directory'' is created under the destination
+  \item An ``absolute path staging directory'' is created under the job output
   directory;
-  this is \texttt{\_temporary-\$jobId}.
-  \item When a new file with an absolute path is required, a path under this
+  this is \texttt{_temporary-\$jobId}.
+  \item When a \texttt{newTaskTempFileAbsPath()} is invoked, a path under this
   directory is generated, with a UUID in the filename.
   \item The mapping of absolute path to temporary file is stored in a map in the Task Committer.
   \item In the \texttt{commitTask()} operation, the map of all files to rename is passed back.
   \item In \texttt{commitJob()}, after invoking the Hadoop committer's \texttt{commitJob()}
   call, all files in the aggregate map of files to rename to absolute paths is iterated through.
-  Each file is renamed(), in turn.
+  Each file is renamed to its final path, in turn.
   \item Task abort will delete files of that task, while Job abort will delete
   the whole absolute path staging directory.
 \end{enumerate}
 
 This is extra operation is currently only used in that specific use case,
-"Hive table with partitions elsewhere in the same filesystem as the active job".
+``Hive table with partitions elsewhere in the same filesystem as the active job''.
 This is not a common use case, at least with data stored in object stores.
 Accordingly, our new committers do not support this operation
 \footnote{It is possible to support this, but it would complicate cleaning up
@@ -1078,10 +1104,10 @@ As examples, the following are all valid keys on the Amazon, Google and Microsof
 stores
 
 \begin{verbatim}
-  /entry
-  /path1/path2/path3
-  /path1/
-  /path1
+/entry
+/path1/path2/path3
+/path1/
+/path1
 \end{verbatim}
 
 More subtly, it is valid for an object store container (on S3: ``bucket'')
@@ -1133,7 +1159,7 @@ For that reason, all the popular cloud storage infrastructures have connectors
 from Hadoop, and thus transitively application such as Apache Hive, Apache HBase
 and Apache Spark.
 Many of these are developed within the Apache Software Foundation's own
-souce repository, including the Azure "wasb" connector and the "s3a" connector
+souce repository, including the Azure ``wasb'' connector and the ``s3a'' connector
 to Amazon S3.
 Others are maintained externally ---particularly Amazon EMR's own ``EMRFS'',
 known by the \texttt{s3} URL schema, and the Google Cloud Storage connector,
@@ -1143,7 +1169,7 @@ Irrespective of where they are implemented, they all share a common objective:
 trying to maintain the filesystem metaphor atop an object store.
 
 As an example of a simple case, the \texttt{getFileStatus()} call mimics
-a directory, in conjunction with zero-byte "empty directory" markers,
+a directory, in conjunction with zero-byte ``empty directory'' markers,
 so must look for a file, then a marker and the most expensive operation, a path listing.
 
 \begin{verbatim}
@@ -1261,7 +1287,7 @@ paths on S3.
 The manifest of the pending MPUs is passed to the job tracker via
 a shared consistent cluster filesystem (usually HDFS), \emph{using the v1
 File Output Committer}.
-When the Hadoop or Spark, job is committed, the Staging committer reads in
+When the Hadoop or Spark job is committed, the Staging committer reads in
 from HDFS the manifests written of the committed task attempts, and
 completes the uploads listed therein.
 
@@ -1304,13 +1330,13 @@ callers use when creating files in a task attempt.
   \caption{Extra variables used by the staging committer}
   \begin{tabular}{ l l }
     \hline
-    & \textbf{v1} & \textbf{v2} \\
+    \textbf{name} & \textbf{meaning} \\
     $localfs$ & The local ``file:'' filesystem \\
     $localAttemptPath$ & A local filesystem path \\
     $clusterfs$ & The cluster filesystem \\
     $clusterCommitter$ & The inner committer for the cluster filesystem \\
-    $clusterJobAttemptPath$ & the job attempt path of $clusterCommitter$ & \\
-    $clusterTaskAttemptPath$ & the job attempt path of $clusterCommitter$ & \\
+    $clusterJobAttemptPath$ & the job attempt path of $clusterCommitter$ \\
+    $clusterTaskAttemptPath$ & the job attempt path of $clusterCommitter$ \\
     \hline
   \end{tabular}
   \label{tab:StagingCommitter.variables}
@@ -1319,15 +1345,14 @@ callers use when creating files in a task attempt.
 %% Define the extra variables for the staging committer
 \newcommand{\StagingVars}{
 \FileOutputCommitVars
-\SetKwData{localfs}{localfs}
-\SetKwData{clusterfs}{clusterfs}
-\SetKwData{clusterCommitter}{\$clusterCommitter}
-\SetKwData{clusterJobAttemptPath}{\$clusterJobAttemptPath}
-\SetKwData{clusterTaskAttemptPath}{\$clusterTaskAttemptPath}
-\SetKwData{localAttemptPath}{\$localAttemptPath}
-\SetKwData{dest}{\$destDir}
-\SetKwData{temp}{\_temporary}
-\SetKwData{jobUUID}{jobUUID}
+\SetKwData{clusterfs}{$clusterfs$}
+\SetKwData{clusterCommitter}{$clusterCommitter$}
+\SetKwData{clusterJobAttemptPath}{$clusterJobAttemptPath$}
+\SetKwData{clusterTaskAttemptPath}{$clusterTaskAttemptPath$}
+\SetKwData{jobUUID}{$jobUUID$}
+\SetKwData{localfs}{$localfs$}
+\SetKwData{localAttemptPath}{$localAttemptPath$}
+\SetKwData{temp}{_$temporary$}
 }
 
 
@@ -1338,15 +1363,6 @@ callers use when creating files in a task attempt.
 \begin{procedure}
   \StagingVars
 
-  \SetKwFunction{checkForConflicts}{checkForConflicts}
-  \SetKwFunction{completeUpload}{completeUpload}
-  \SetKwFunction{getUsername}{getUsername}
-  \SetKwFunction{newUUID}{newUUID}
-  \SetKwFunction{savePendingSet}{savePendingSet}
-  \SetKwFunction{loadPendingSet}{loadPendingSet}
-  \SetKwFunction{tempDirForStaging}{tempDirForStaging}
-  \SetKwFunction{uniquePath}{uniquePath}
-  \SetKwFunction{uploadFileToPendingCommit}{uploadFileToPendingCommit}
   \jobUUID $\longleftarrow$ \newUUID \;
   \clusterJobAttemptPath $\longleftarrow$ \tempDirForStaging + + \getUsername + \jobUUID \;
 
@@ -1396,12 +1412,11 @@ this setup will also include a check for the destination path, raising
 an exception if it is present.
 
 \begin{function}
-  \StagingVars
+\StagingVars
   \return \localAttemptPath\;
 
 \caption{StagingCommitter.getWorkPath()}
 \label{alg:StagingCommitter.getWorkPath}
-
 \end{function}
 
 
@@ -1423,6 +1438,24 @@ Note at until this point the executing job has not written any data to
 the final destination filesystem;
 all data is only on the local server.
 
+
+\textbf{Task Abort}
+
+A task is aborted by deleting all staged data, and aborting the cluster committer's
+task.
+
+\begin{procedure}
+  \StagingVars
+
+  \delete(\localfs, \localAttemptPath, $recursive$)\;
+  \clusterCommitter.abortTask()\;
+
+  \caption{StagingCommitter.abortTask()}
+  \label{StagingCommitter.abortTask}
+\end{procedure}
+
+
+
 \textbf{Task Commit}
 
 If a task is given permission to commit its work, it does
@@ -1433,12 +1466,13 @@ to the final destination directory.
 % commit task
 \begin{procedure}
   \StagingVars
+  \clusterCommitter.commitTask()\;
+
   $U \longleftarrow \emptyset$\;
-  \For{$f\leftarrow $ \listfiles(\localfs, \localAttemptPath) }{
+  \For{$f\in $ \listFiles(\localfs, \localAttemptPath) }{
   $U \longleftarrow U + \{$ \uploadFileToPendingCommit($f$, \dest) $\}$\;
   }
   \savePendingSet(\clusterfs, \clusterTaskAttemptPath, $U$)\;
-  \clusterCommitter.commitTask()\;
 
 \caption{StagingCommitter.commitTask()}
 \label{alg:StagingCommitter.commitTask}
@@ -1457,13 +1491,11 @@ filename of the actual task., that is \texttt{\$clusterJobAttemptPath/\$taskId}.
 % commit job
 \begin{procedure}
   \StagingVars
-  \tcp{load the outstanding upload list from every committed task}
   $Pending \longleftarrow \emptyset$\;
-  \For{$f \leftarrow $ \listfiles(\clusterfs, \clusterTaskAttemptPath)} {
+  \For{$f \in $ \listFiles(\clusterfs, \clusterTaskAttemptPath)} {
     $Pending \longleftarrow Pending + $ \loadPendingSet(\clusterfs, $f$)\;
   }
   \checkForConflicts(\fs, $Pending$)
-  \tcp{complete the outstanding uploads}
   \For{$p \leftarrow Pending$}{
     \completeUpload($p$)\;
   }
@@ -1481,9 +1513,66 @@ because the location of the pending set files of this job attempt is known,
 they can be read directly.
 This is a minor optimization.
 
+% Abort Job
+
+\textbf{Job Abort}
+
+To abort an entire job, the set of pending uploads must be enumerated as
+per job commit, only now the jobs are aborted.
+
+\begin{procedure}
+  \StagingVars
+  $Pending \longleftarrow \emptyset$\;
+  \For{$f \in $ \listFiles(\clusterfs, \clusterTaskAttemptPath)} {
+  $Pending \longleftarrow Pending + $ \loadPendingSet(\clusterfs, $f$)\;
+  }
+  \For{$p \leftarrow Pending$} {
+    \abortUpload($p$)\;
+  }
+  \clusterCommitter.abortJob()\;
+
+  \caption{StagingCommitter.abortJob()}
+  \label{alg:StagingCommitter.abortJob}
+\end{procedure}
+
+
+% Cleanup 
+
+\textbf{Job Cleanup}
+
+To clean up a job all incomplete uploads targeted at or under
+the output directory must be enumerated and aborted, which can be done
+with a POST to S3 to list the outstanding uploads, and another POST per
+upload to abort.
+
+Local task attempt directories must be deleted, as well as those in the shared cluster.
+
+\begin{procedure}
+  \StagingVars
+
+  \For{$f \in $ \listPendingUploads(\dest)} {
+  \abortUpload($f$)\;
+  }
+
+  \delete(\localfs, $local directories for job$, recursive)\;
+  \clusterCommitter.cleanupJob()\;
+
+  \caption{StagingCommitter.cleanupJob()}
+  \label{alg:StagingCommitter.cleanupJob}
+\end{procedure}
+
+
+As those local task attempt directories are local to the nodes executing
+individual tasks, they will not be deleted in the job cleanup, except for
+those tasks which were executed on the same host as that where the
+\texttt{cleanupJob()} operation is invoked.
+
+
+\subsubsection{Enhancing conflict resolution for a zero-rename workflow}
+
 One aspect of the commit algorithm omitted is how this committer resolves
 conflict with existing files.
-The \FileOutputCommitter algorithms fail if there is destination data;
+The FileOutputCommitter algorithms fail if there is destination data;
 they are expected to have an empty directory to write to.
 
 The Staging Committer supports alternative policies, and may be configured
@@ -1537,7 +1626,7 @@ take to copy the data.
 
 
 
-\subsubsection{The Magic Committer}
+\subsection{The Magic Committer}\label{subsec:theMagicCommitter}
 
 
 As discussed, the magic committer recognizes special paths as ``magic'',
@@ -1606,9 +1695,10 @@ and job commit operations.
 
 %% Define the extra variables for the magic committer
 \newcommand{\MagicVars}{
-\SetKwData{dest}{\$destDir}
-\SetKwData{temp}{\_temporary}
+\FileOutputCommitVars
+\SetKwData{temp}{_$temporary$}
 \SetKwData{magic}{\_\_magic}
+\SetKwData{magicPath}{$magicPath$}
 }
 
 
@@ -1616,7 +1706,8 @@ and job commit operations.
   \caption{Extra variables used by the magic committer}
   \begin{tabular}{ l l }
     \hline
-    & \textbf{v1} & \textbf{v2} \\
+    \textbf{name} & \textbf{meaning} \\
+
     $magicPath$ & The magic directory \\
     \hline
   \end{tabular}
@@ -1631,10 +1722,9 @@ and job commit operations.
 \begin{procedure}
   \MagicVars
 
-  \magicPath $\longleftarrow$ \dest + \_\_$magic$\;
+  \magicPath $\longleftarrow$ \dest + __magic\;
   \jobAttemptPath $\longleftarrow$ \magicPath + + \jobAttemptId\;
   \taskAttemptPath $\longleftarrow$ \jobAttemptPath/\taskAttemptId\;
-  \clusterCommitter.setupJob(\clusterJobAttemptPath)\;
   \mkdirs(\fs, \jobAttemptPath)\;
   \caption{MagicCommitter.setupJob()}
   \label{alg:MagicCommitter.setupJob}
@@ -1656,6 +1746,29 @@ and job commit operations.
 
 \end{procedure}
 
+\textbf{Needs Task Commit}
+
+A commit is required iff files are pending, which is true if there are 
+files to upload.
+
+\begin{function}
+  \StagingVars
+
+  \return \exists(\fs, \taskAttemptPath)\;
+
+  \caption{MagicCommitter.needsTaskCommit()}
+  \label{alg:MagicCommitter.needsTaskCommit}
+
+\end{function}
+
+This will return true even if there are no .pending files under the task attempt
+path.
+A full path listing could determine this, but as this itself is potenally a slow
+operation, we have omitted it, relying on the task commit process to
+handle the case of no output being generated.
+
+
+
 % commit task
 
 A task attempt is committed by listing all the single \texttt{.pending} files
@@ -1666,13 +1779,11 @@ which is still in the \texttt{__magic} directory.
 
 \begin{procedure}
   \MagicVars
-  \tcp{List .pending files}
   $Pending \longleftarrow \emptyset$\;
-  \For{$f \leftarrow $ \listfiles(\fs, \taskAttemptPath, $recursive$)}{
+  \For{$f \in $ \listFiles(\fs, \taskAttemptPath, $recursive$)}{
     $Pending \longleftarrow Pending + \{$ \loadPendingFile(\fs, $f$) $\}$\;
   }
 
-  \tcp{Save the set as a .pendingset file for the job}
   \savePendingSet(\fs, \jobAttemptPath + $taskAttemptId$, $Pending$)\;
 
   \caption{MagicCommitter.commitTask()}
@@ -1680,9 +1791,30 @@ which is still in the \texttt{__magic} directory.
 
 \end{procedure}
 
-Because the .pendingset file is written in a single atomic PUT to S3, the
-commit of an individual task is atomic.
-There is no need to use a cluster filesystem or the existing file output committers.
+Because the .pendingset file is written in a single atomic PUT, the
+commit of an individual task attempt is atomic.
+
+If there are no .pending files, the saved .pendingset file will contain an empty
+list of pending uploads.
+
+
+\textbf{Task Abort}
+
+A task is aborted by listing all .pending files in the task attempt directory,
+then aborting the upload associated with it
+
+\begin{procedure}
+  \MagicVars
+
+  \For{$f \in $ \listFiles(\fs, \taskAttemptPath, $recursive$)}{
+    \abortUpload(\loadPendingFile(\fs, $f$))\;
+  }
+
+  \caption{MagicCommitter.abortTask()}
+  \label{MagicCommitter.abortTask}
+\end{procedure}
+
+
 
 
 \textbf{Job Commit}
@@ -1691,13 +1823,11 @@ There is no need to use a cluster filesystem or the existing file output committ
 \begin{procedure}
   \MagicVars
 
-  \tcp{load the outstanding upload list from every committed task}
   $Pending \longleftarrow \emptyset$\;
-  \For{$f \leftarrow $ \listfiles(\fs, \jobAttemptPath)} {
-  $Pending \longleftarrow Pending + $ \loadPendingSet(\clusterfs, $f$)\;
+  \For{$f \in $ \listFiles(\fs, \jobAttemptPath)} {
+  $Pending \longleftarrow Pending + $ \loadPendingSet(\fs, $f$)\;
   }
-  \tcp{complete the outstanding uploads}
-  \For{$p \leftarrow Pending$}{
+  \For{$p \in Pending$}{
     \completeUpload($p$)\;
   }
 
@@ -1712,6 +1842,35 @@ This committer does not currently support the ``partitioned commit'' conflict
 resolution mechanism, so omits the conflict handling operation.
 Otherwise it is identical, and has the similar performance and (non-) atomicity
 characteristics.
+
+
+% Abort Job
+
+\textbf{Job Abort/ Job Cleanup}
+
+A job is aborted and/or cleaned up by aborting all outstanding uploads
+pending against the destination directory.
+
+\begin{procedure}
+  \MagicVars
+
+  \For{$f \in $ \listPendingUploads(\dest)} {
+     \abortUpload($f$)\;
+  }
+
+  \caption{MagicCommitter.abortJob()}
+  \label{alg:MagicCommitter.abortJob}
+\end{procedure}
+
+
+No attempt is made here to list any .pending or .pendingset files.
+The committer cannot rely on those to completely enumerate all uploaded files,
+specifically those of failed task attempts, where the information about
+the pending upload may not have been not saved.
+Asking the S3 store to enumerate all pending uploads, and then aborting each one
+guarantees that all incomplete uploads will be aborted.
+
+
 
 
 
@@ -1760,10 +1919,10 @@ The \texttt{PathOutputCommitProtocol}, which extended Spark's
 committer to be a subclass of \texttt{FileOutputCommitter}.
 
 The \texttt{BindingParquetOutputCommitter} extends Parquet's
-\texttt{org.apache.parquet.hadoop.ParquetOutputCommitter} class, relaying
+\texttt{ParquetOutputCommitter} class, relaying
 all commit operations to that of whichever committer was committer dynamically created
 through the factory mechanism.
-This allows the requirement "Must be a ParquetOutputCommitter" to be satisfied
+This allows the requirement ``Must be a ParquetOutputCommitter'' to be satisfied
 with any committer generated by a committer factory.
 
 During the development of the committers, a change in Spark caused the
@@ -1790,7 +1949,7 @@ Do the two variant algorithms actually \emph{work}?
 First, a definition of correct behavior must be defined.
 
 \begin{paragraph}
-  \textbf{Completeness of output.}\\
+  \textbf{Completeness of output.}
   After a job has successfully returned from an invocation of \texttt{commitJob()},
   the destination directory tree will contain all files written under the output directory
   of all task attempts which successfully returned from an invocation of \texttt{commitTask()}.
@@ -1799,7 +1958,7 @@ First, a definition of correct behavior must be defined.
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Exclusivity of output.}\\
+  \textbf{Exclusivity of output.}
   After a job has successfully returned from an invocation of \texttt{commitJob()},
   the destination directory tree will contain *no* files written under the output directory
   of any task attempt which were not committed, or did not return from an invocation of \texttt{commitTask()}
@@ -1807,7 +1966,7 @@ First, a definition of correct behavior must be defined.
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Consistency of the commit.}\\
+  \textbf{Consistency of the commit.}
   The task or job must be able to reliably commit the work, even in the presence
   of inconsistent listings.
   This could be addressed, for example, by using a consistent store for some operations,
@@ -1818,14 +1977,14 @@ First, a definition of correct behavior must be defined.
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Concurrent.}\\
+  \textbf{Concurrent.}
   Multiple tasks in the same job must be able to commit concurrently.
   A job must be able to commit its work while other jobs are committing
   their work \emph{to different destinations in the store}.
 \end{paragraph}
 
 \begin{paragraph}
-  \textbf{Ability to abort.}\\
+  \textbf{Ability to abort.}
   If a job attempt is aborted before \texttt{commitJob()}, is invoked, and
   \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
   destination directory at any point in the future.
@@ -1834,7 +1993,7 @@ First, a definition of correct behavior must be defined.
 
 
 \begin{paragraph}
-  \textbf{Continuity of correctness.}\\
+  \textbf{Continuity of correctness.}
   After a job has been successfully committed, no outstanding task may promote
   output into the destination directory.
   That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
@@ -1925,29 +2084,39 @@ list of files promoted by the (now-completed) v1 commit process.
 This is harder to demonstrate, and depends on consistent directory
 listings of the object stores, that is: all files created under a path
 in the object store are visible to the LIST operation.
-For Amazon S3, this requires a consistency layer, such as Semper or S3Guard
-\ \cite{Semper,HADOOP-13345}.
-The Magic committer was written and tested with the expecation that S3Guard
-provides this.
+For Amazon S3, this requires a consistency layer, such as S3mper or S3Guard
+\ \cite{S3mper,HADOOP-13345}.
+The Magic committer was written and tested with the expecation that either the
+store itself was consistent, or S3Guard provided sufficient metadata consistency.
 
 All task attempt output is written to the object store, to the final (calculated)
 destination.
-However, they are not made visible until the job is committed.
+However, the writes are not made visible until the job is committed.
 
 The requirements of completeness and exclusivity must be met by
 having the lists of pending uploads generated by committed task attempts propagated
 to the Job Commit phase, and the list of pending uploads from uncommitted
 attempts not propagated to the Job Commit.
 
+That is
+
+\begin{enumerate}
+  \item All pending uploads written by a committed task attempt must be
+  included in the final list of uploads for the job to commit.
+  \item No pending uploads by a failed task attempt must be included in this list.
+  \item A partitioned task attempt's uploads must become visible, even if uploaded after task or job commit
+\end{enumerate}
+
 
 Reviewing this code, there appears to be a small race condition in job commit,
-wherein a task partitioned from the Job Manager during commitTask
-(this considered failed and reattempted),
+wherein a task attempt partitioned from the Job Manager during task commit
 can still complete it's PUT of its list of uploads to commit, the ``pending set'',
 overwriting that of the task attempt which had considered itself successful.
+
 We cannot defend against that with the traditional strategy of creating
 a file with overwrite=false, because against S3, there is no atomic
-"create-no-overwrite" operation.
+``create-no-overwrite'' operation.
+
 Instead we rely on the requirement of work, that any committed task attempt must
 constitute a valid outcome, and argue that the pending set from either attempt
 must constitue a valid result of a task.
@@ -1963,7 +2132,7 @@ Regarding the requirement to abort safely, the fact that all writes are
 not manifest until job commit means that the any writes from failed tasks
 will remain ``pending''.
 
-Data in this state is still billed by the megabyte, so must not be neglecte.
+Data in this state is still billed by byte, so must not be neglected.
 After the job commits all successful tasks it lists all outstanding
 uploads against the destination directory and cancels them.
 There are also command line tools to list and cancel pending uploads,
@@ -1994,11 +2163,11 @@ This was done through testing:
   \item Peer review.
 \end{enumerate}
 
-To aid in demonstrating resilience to delayed consistency in object listing
+To aid in demonstrating resilience to metadata inconsistency
 operations and transient network failures, Hadoop's \texttt{hadoop-aws} module
-now contains a special fault-injecting S3 connector: heavy throttling and
-delayed consistency can both be simulated in the downstream tests, so
-increasing confidence.
+now contains a special fault-injecting S3 connector: idempotent throttling errors and
+delayed consistency can both be simulated in the downstream tests;
+this was used in integration testing.
 
 The large-scale integration tests have not, at the time of writing, highlighted any problems;
 the simpler test suites were co-developed with the code, and exposing issues and
@@ -2007,11 +2176,6 @@ One bug the integration tests did show that our committers' cleanup code was
 over-aggressive in listing and cancelling all outstanding uploads pending
 on the destination directory.
 
-Peer review is an integral part of the development process;
-It was invaluable to have other developers interested in this problem
-and willing to contribute time reviewing the code and testing it
-in their own environments, including a commercial S3-compatible
-storage system.
 
 The \texttt{cleanupJob()} procedure used the existing S3A client command
 \texttt{listMultipartUploads(directory)} to enumerate the updates,
@@ -2033,6 +2197,12 @@ executions overlapped, and the first test executed is \texttt{cleanupJob()}
 operation when the second had committed at least one task but not committed
 the final job?
 
+
+Peer review is an integral part of the development process;
+It was invaluable to have other developers interested in this problem
+and willing to contribute time reviewing the code and testing it
+in their own environments, including a commercial S3-compatible
+storage syst
 
 % ========================================================================
 
@@ -2095,7 +2265,7 @@ protocol: no output visible until committed, and, as this materialization
 takes place in job commit, it has better visibility characteristics than
 the v2 algorithm.
 
-One final feature to highlight is the "partitioned committer" variant
+One final feature to highlight is the ``partitioned committer'' variant
 of the Staging Committer, which is designed to update an existing
 dataset in-situ, only considering conflict with existing data in
 those partitions for which data is actually generated.
@@ -2118,7 +2288,7 @@ simply the query.
 \label{sec:limitations}
 
 A key criticism of the new algorithm is that the job commit operation is not atomic;
-it is $O(files)$ operation which may fail partway through.
+it is an $O(files)$ operation which may fail partway through.
 We respond that as Hadoop's MapReduce v1 commit algorithm it itself non-atomic in job commit;
 the job manager commit algorithm is designed to detect failures in job commits
 of previous attempts, and either recover or fail, according to the actions
@@ -2127,9 +2297,10 @@ A more subtle issue is the volume of POST requests required of a significantly l
 all against a specific shard of the S3 store can trigger HTTP throttling.
 This reduces the benefit of parallelized issuing of the POST requests.
 
-A task process may exit without \texttt{abortTask()} being invoked.
-Specifically, it exit immediately during the ping/response
+A Hadoop task process may exit without \texttt{abortTask()} being invoked.
+Specifically, it exist immediately during the ping/response
 heartbeat process if any of a number of conditions are met.
+This is probably a bug in Hadoop ---and straightforward to correct.
 
 \begin{enumerate}
   \item Predefined task limits are exceeded
@@ -2147,7 +2318,7 @@ There is also the without-warning failures triggered by the operating system
 if limits on the execution environment are exceeded: usually memory allocation.
 
 While OS-level failures can occur without warning, it would be useful if the
-"managed" system exits triggered in the heartbeat thread were to invoke
+``managed'' system exits triggered in the heartbeat thread were to invoke
 an emergency task cleanup operation.
 For the S3A committers, this would consist of aborting all pending uploads, and
 deleting any local data.
@@ -2409,7 +2580,7 @@ interact with the stores without modification.
 However, the core semantics required by conventional commit algorithms, particulary
 that of an $O(1)$ atomic rename, are not not met.
 While the existing Hadoop/Spark commit algorithms appear to work, they lack
-both the performance and correctness delivered when used with a "real" filesystem.
+both the performance and correctness delivered when used with a ``real'' filesystem.
 
 We have demonstrated that the use of object-store specific operations --here
 the multipart PUT with its ability to complete the upload from a different host--
@@ -2443,7 +2614,7 @@ commit protocols and suchlike: any API which offered a lowest-common-denominator
 would likely prove itself inadequate.
 
 The integration with the Hadoop and Spark commit protocols is intended
-to support different committers for different destination "filesystems".
+to support different committers for different destination filesystems.
 We hope to see committers supporting other object stores, each
 able to use store-specific operations.
 What can be offered is common code for much of each implementation,
@@ -2472,6 +2643,7 @@ Given how critical the correctness of the protocol and committers and implementa
 are, and how other projects depend also use the same code, there
 are opportunities to better specify the protocol and APIs, and review
 their use.
+We hope this document is a start, while warning readers that it is non-normative.
 
 % ========================================================================
 
