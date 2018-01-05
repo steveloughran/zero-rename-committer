@@ -53,6 +53,13 @@ This could not be done without breaking all other active jobs writing to
 the same bucket.
 
 
+Committer resilience/reliability could be enhanced by tracking that list of
+files to commit: tasks could record the files they'd provisionally committed and return
+that to the job committer. (more specifically, final dest files)
+That could then verify that after job commit, they were there.
+This is a safety check which could be done at the commit layer; the spark protocols
+have room for this
+
 
 \section{Statistic collection}
 
@@ -87,11 +94,44 @@ to adopt the checks.
 
 
 
-\section{More tests}
+\section{S3a Committers}
 
+
+\section{Validation}
+
+What about an option of a post Job commit verification that all committed files
+are really there?
+That's done in the integration tests by reading the data in _SUCCESS;
+it could be added into the Job Committer itself.
+It's potentially expensive in cost and time at a HEAD/file;
+a listFiles(dest, recursive) could be used instead, with, on the partitioned
+committer, only generated partitions checked.
+
+This is really just a safety check, but it could could be useful in testing
+and diagnostics, because you wouldn't need to add specific logic to read in
+the (unstable) _SUCCESS JSON data & check there.
+
+\subsubsection{Magic committer}
 
 Make sure that an empty directory can still be committed & generates
 an empty pendingset  file, and that when loaded, its harmless.
+
+
+
+\section{Aborts and cleanup}
+
+Everythuing needs to assume that the committers abort and cleanup operations may raise exceptions.
+
+When invoked, they should be should be surrounded by try/catch blocks When subclassed, the subclasses
+should do their own cleanup operations in a try/finally clause.
+
+Executors/drivers should call these operations on all failure codepaths;
+Hadoop MR doesn't appear to do this.
+
+Current committers should do that try/catch themselves, even though the method
+signature allows them to raise IOEs.
+This avoids them having to wait for new releases of the execution engines
+for the add resilience.
 
 
 \end{document}
