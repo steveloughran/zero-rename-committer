@@ -857,13 +857,10 @@ of the directory tree.
 A recursive walk implemented on the client will execute one \texttt{listFiles}
 call for every child entry in a directory, for each child file a delete and
 rename, and for each child directory, a another recursive merge.
-
-
-This is potentially significantly more expensive in terms of RPC
+And it is potentially significantly more expensive in terms of RPC
 calls, placing more load on the filesystem and being slower overall.
-As most tasks are not on the critical path for job execution, however,
-this inefficiencies of the operation are likely to be offset by the
-elimination of the job commit delays.
+Yet, because these operations are taking place in task commits, work is parallelized
+across the cluster, and, often, not directly slowing down the overall job.
 
 
 With the file propagation taking place in the tasks, the job commit
@@ -879,14 +876,16 @@ working directories:
 \caption{Updated commitJob()}
 \end{procedure*}
 
-In terms of failure resilience, the v2 algorithm is weaker than the v1 algorithm.
-Task commit is not atomic;
-it is a recursive treewalk-and-rename operation.
-It is therefore not possible to recover from the failure of a task to commit.
-This also means that it it's impossible to recover from the failure of a job other
-than by deleting the destination directory and re-executing the entire job.
+As a result, the time to commit a job is barely measurable.
 
-It has sacrificed resilience for speed.
+In terms of failure resilience, the v2 algorithm is weaker than the v1 algorithm.
+Task commit is a non-atomic recursive treewalk-and-rename operation.
+It is therefore not possible to recover from the failure of a task to commit.
+This also means that it's impossible to recover from the failure of a job other
+than by deleting the destination directory and re-executing the entire job
+\footnote{There is job recovery code, we just aren't convinced it works reliably}.
+
+This commit algorithm has chosen speed over resilience.
 This is often a valid decision to make, however, the callers of the committers
 need to be aware that this decision has been made, and that failures in
 certain parts of the process, specifically task commit, are not recoverable.
@@ -895,9 +894,9 @@ certain parts of the process, specifically task commit, are not recoverable.
 \label{subsec:limitationsOfTheHadoopMapreduceCommitProtocol}
 
 Alongside some implementation details, such as the fact that a task process
-will executed without calling \texttt{cleanupTask()} once it is informed that it
+will be exit without calling \texttt{cleanupTask()} once it is informed that it
 is unknown, we have to consider: are there any fundamental issues with
-the protocol?
+the Hadoop commit protocol?
 
 A key weakness is that the job committer is not passed the list of task
 attempts considered successful, and, from those committed tasks, their
@@ -1043,7 +1042,7 @@ of written files from the task attempts to the job committer.
 Being able to generate names (albeit while preserving a sort order), could
 also be potentially useful.
 We have initially chosen to not explore this as a commitment strategy;
-others may wish to.
+others may wish to do so.
 
 
 
@@ -1071,7 +1070,7 @@ a repeated attempt were permitted, or whether failing the Job was the
 safer outcome.
 
 
-Unlike the Hadoop algorithm, there is no requirement for the Spark Driver
+Unlike the Hadoop protocol, there is no requirement for the Spark Driver
 to have received a recent liveness check from the cluster scheduler.
 Unless the Spark Driver process exits once it determines that it has been
 isolated from any underlying cluster scheduler, there is a risk that
@@ -1080,7 +1079,7 @@ as a cluster instantiated as a replacement.
 Careful review of the YARN and Mesos integration code is required to be
 confident that this risk does not exist.
 
-The Spark commit algorithm does permit task committers to return data to
+The Spark commit protocol does permit task committers to return data to
 the Job Committer in the Spark Driver;
 it should be possible to use this to validate the output of the tasks.
 The current committer implementations do not do this, but at least the underlying
@@ -1148,7 +1147,8 @@ The set of operations offered are normally an extended set of HTTP verbs:
 
 There are usually two extra operations to address scale:
  a bulk delete call which may have partial failures,
-and \emph{Multipart Upload}; a way to upload an object larger than the 5GB which a single HTTP POST can support.
+and \emph{Multipart Upload}; a way to upload an object larger than the
+5GB which a single HTTP POST can support.
 The exact nature of multipart uploads varies from store to store.
 For Amazon this is initiated as a sequence of POST calls, one to initiate,
 one or more POST calls with data, and a final POST listing the (ordered)
@@ -1195,7 +1195,7 @@ down all RPC operations, even with pooled collections: even this simple probe
 can for a file take hundreds of milliseconds.
 Other mimiced operations have similar costs.
 
-Operations opon directories are mimiced by listing all objects under that path,
+Operations upon directories are mimiced by listing all objects under that path,
 and acting upon those objects individually.
 A recursive delete is implemented as a listing of the maximum number of files
 returned in one HTTP request (5000 or a similar value), then either issuing
@@ -1249,7 +1249,7 @@ directory listings and existence checks (v1 and v2).
 
 As a result, neither can be used directly against Amazon S3 today.
 With a consistent metadata layer such as S3mper or S3Guard, the v2 algorithm
-can be used, albeit slow.
+can be used, though its task commit time will be $O(data)$\ \cite{S3mper,HADOOP-13345}.
 
 Providing a safe, performant output committer for object stores forces
 us to leave the metaphor of a filesystem behind, and embrace
@@ -1261,8 +1261,9 @@ the capabilites of object stores themselves.
 \label{sec:theNewS3aCommitters:WorkingWithS3FromTheOutset}.
 
 
-Given that the filesystem metaphor is not viable, how can Hadoop and Spark
-jobs safely use S3 as a destination of their work?
+Given that S3 does not deliver the safe and performant operations
+which the file committers expect, how can Hadoop and Spark
+jobs safely use it as a destination of their work?
 
 This is the problem solved by the new ``S3A committers''.
 These are called as they are closely integrated with Hadoop's S3A connector to S3,
@@ -1370,9 +1371,6 @@ callers use when creating files in a task attempt.
 
 \textbf{Job Setup}
 
-
-
-
 The cluster-filesystem committer, \texttt{wrappedCommitter}.
 is created and initialized, configured to use a unique path within the
 cluster fileystem as its $clusterJobAttemptPath$ output directory.
@@ -1436,9 +1434,11 @@ This local filesystem is returned by the committer's \texttt{getWorkPath()} meth
 \end{function}
 
 This is the crux of the algorithm.
-Task attempt code requesting a path for working data is returned a local
-\texttt{file://}-prefixed directory, into which they save their output.
-The task commit process then uploads these files as uncompleted-multipart uploads.
+
+The working path returned to the task attempt execution code in MapReduce and Spark
+is a \texttt{file://}-prefixed local directory, not one in the object store.
+The task attempt commit process is where these will be uploaded, and the job
+commit where the uploads are materialized.
 
 % -----------------------------------------------------------------
 \textbf{Needs Task Commit}
@@ -1458,7 +1458,7 @@ A commit is required iff data has been generated in the local filesystem.
 
 \textbf{Task Abort}
 
-A task is aborted by deleting all staged data, and aborting the wrapped committer's
+A task attempt is aborted by deleting all staged data, and aborting the wrapped committer's
 task.
 
 \begin{procedure}
@@ -1475,7 +1475,7 @@ task.
 
 \textbf{Task Commit}
 
-If a task is given permission to commit its work, it does
+If a task attempt is given permission to commit its output, it does
 so by initiating multipart uploads of all files under \texttt{localAttemptPath}
 to the final destination directory, uploading the data, but not completing
 the operation.
@@ -1496,8 +1496,8 @@ the operation.
 
 \end{procedure}
 
-The set of pending uploads are then saved as a manifest file to
-\texttt{clusterTaskAttemptPath}, after which the wrapped committer has
+The information needed to complete these pending uploads are then saved as
+a manifest file to \texttt{clusterTaskAttemptPath}, after which the wrapped committer has
 its \texttt{commitTask()} operation called.
 This will rename the saved file into the job attempt directory with the
 filename of the actual task., that is \texttt{\$clusterJobAttemptPath/\$taskId}.
@@ -1505,11 +1505,17 @@ filename of the actual task., that is \texttt{\$clusterJobAttemptPath/\$taskId}.
 
 \textbf{Job Commit}
 
+The Job commit process manifests the pending uploads.
+
+The list of uploads is found by listing the files in the cluster job attempt path
+This is the directory into which the pending set files of task attempts are
+renamed during their task commits.
+
 % commit job
 \begin{procedure}
   \StagingVars
   $Pending \longleftarrow \emptyset$\;
-  \For{$f \in $ \listFiles(\clusterfs, \clusterTaskAttemptPath)} {
+  \For{$f \in $ \listFiles(\clusterfs, \clusterJobAttemptPath)} {
     $Pending \longleftarrow Pending + $ \loadPendingSet(\clusterfs, $f$)\;
   }
   \checkForConflicts(\fs, $Pending$)
@@ -1521,7 +1527,7 @@ filename of the actual task., that is \texttt{\$clusterJobAttemptPath/\$taskId}.
   \label{alg:StagingCommitter.commitJob}
 \end{procedure}
 
-The \texttt{completeUpload()} completes the upload of a file by POST-ing
+The \texttt{completeUpload()} operation completes the upload of a file by POST-ing
 a complete-multipart-upload requesting list the ordered MD5 checksums of every block
 previously uploaded.
 
@@ -1540,7 +1546,7 @@ per job commit, only now the jobs are aborted.
 \begin{procedure}
   \StagingVars
   $Pending \longleftarrow \emptyset$\;
-  \For{$f \in $ \listFiles(\clusterfs, \clusterTaskAttemptPath)} {
+  \For{$f \in $ \listFiles(\clusterfs, \clusterJobAttemptPath)} {
   $Pending \longleftarrow Pending + $ \loadPendingSet(\clusterfs, $f$)\;
   }
   \For{$p \in Pending$} {
@@ -1552,8 +1558,7 @@ per job commit, only now the jobs are aborted.
   \label{alg:StagingCommitter.abortJob}
 \end{procedure}
 
-
-% Cleanup 
+% Cleanup
 
 \textbf{Job Cleanup}
 
@@ -1568,7 +1573,7 @@ Local task attempt directories must be deleted, as well as those in the shared c
   \StagingVars
 
   \For{$f \in $ \listPendingUploads(\dest)} {
-  \abortUpload($f$)\;
+    \abortUpload($f$)\;
   }
 
   \delete(\localfs, $local directories for job$, recursive)\;
@@ -1590,7 +1595,7 @@ those tasks which were executed on the same host as that where the
 One aspect of the commit algorithm omitted is how this committer resolves
 conflict with existing files.
 The \texttt{FileOutputCommitter} algorithms fail if there is destination data;
-they are expected to have an empty directory to write to.
+they are required to have an empty output directory.
 
 The Staging Committer supports alternative policies, and may be configured
 to overwrite or add to data in the destination directory.
@@ -1611,16 +1616,17 @@ Often large datasets like these are built up over time, with nightly or hourly
 results being added.
 In a traditional workflow, this is normally by done by
 executing the new query into an empty directory, then, once the job has succeeded,
-moving the new data into the aggregate dataset.
+moving the new data into the aggregate dataset through `rename()` operations.
 This generate-then-rename strategy ensures that if a job fails, no matter when
 it happened, original dataset is unchanged,
 and that applications can continue to use the current set of files.
 
 In an object store, that rename operation is of course, another expensive copy
 operation, with its own failure modes.
+
 What to do?
 
-The solution as developed and utilized at Netflix was to have a special mode
+The solution as developed and utilized at Netflix is to have a special mode
 of the committer, ``Partitioned'', which expects all data to be written
 into one or more subdirectories of a partitioned dataset, a dataset which
 may already exist in the destination directory.
@@ -1636,12 +1642,10 @@ Thus, ``the Partitioned Staging Committer''
 permits jobs to be run with their destination set to the actively
 shared dataset, while existing work queries can be run across the data.
 By eliminating the need to copy data at the end of an isolated query,
-it can speed up a workflow of execute-then-rename by the time it would
-take to copy the data.
+it can speed up a workflow of execute-then-rename.
 
 
-
-\subsection{The Magic Committer}\label{subsec:theMagicCommitter}
+\subsection{The Magic Committer}\label{subsec:magiccommitter}
 
 Rather than stage data in the local filesystem, the magic committer
 allows task attempts to write directly to the object store as
@@ -1835,7 +1839,7 @@ from a directory and completing the uploads listed within.
 
   $Pending \longleftarrow \emptyset$\;
   \For{$f \in $ \listFiles(\fs, \jobAttemptPath)} {
-  $Pending \longleftarrow Pending + $ \loadPendingSet(\fs, $f$)\;
+    $Pending \longleftarrow Pending + $ \loadPendingSet(\fs, $f$)\;
   }
   \For{$p \in Pending$}{
     \completeUpload($p$)\;
@@ -1863,7 +1867,7 @@ pending against the destination directory.
   \MagicVars
 
   \For{$f \in $ \listPendingUploads(\dest)} {
-     \abortUpload($f$)\;
+    \abortUpload($f$)\;
   }
 
   \caption{MagicCommitter.abortJob()}
@@ -2021,7 +2025,8 @@ This failure to respond to heartbeats triggers YARN rescheduling a new
 instance of the Job Manager and an attempt to kill the previous attempt.
 A second Job attempt may conclude from the very fact that it has been launched
 that the previous job attempt will not attempt to commit its work
-\footnote{the monotonically increasing YARN attempt ID value implicitly informs the Job whether or not it is the first attempt}.
+\footnote{the monotonically increasing YARN attempt ID value implicitly
+informs the Job whether or not it is the first attempt}.
 
 This definition of correctness omits some constraints:
 
