@@ -354,41 +354,41 @@ which is explicitly used by the application for requesting new processes
 across the cluster, and implicitly used by the Resource Manager
 as a liveness probe of the application.
 
-When a launched process terminates, this fact, and the process exit code
+When a launched process terminates, the process exit code
 is passed to the \emph{ResourceManager} within the regular status heartbeats
 between each NodeManager and the ResourceManager.
 If it is the Application Master itself which has terminated, unless it explicitly
 declared itself to be finished, the application is considered to have failed.
 All worker processes will be terminated (by default), and a new instance
 of the Application Master scheduled for execution.
+If it was a worker process, the Application Master chooses how to    react.
+
 
 In MapReduce, the YARN Application Master is the Job Manager,
 with every individual task attempt executed in a unique worker process, termed
-an executor in this paper.
+an ```executor'' in this paper.
 A direct RPC protocol between the Job Manager and the executors is used to manage
 the commit operation.
-The YARN scheduler provides extra liveness monitoring: reporting exited Executors
-to the Job Manager, and restarting the Job Manager itself on a failure.
 Excluding process failures, all liveness detection must be performed by the
-Job Manager.
+Job Manager, which is done based on timeouts of this direct RPC protocol.
 
 % -----------------------------------------------------------------------
 
-\subsection{Optional recoverable failure modes}
+\subsection{Recoverable Failure Modes}
 \label{subsec:optionalRecoverableFailureModes}
 
 \subsubsection{Job Recovery}
 
-YARN perceived Job Manager process to have failed, it instantiates
+When YARN perceives the Job Manager process to have failed, it instantiates
 a new instance of the process somewhere within the cluster.
-This new process creates an instance of the specified Job Committer,
+This new Job Manager creates an instance of the specified Job Committer,
 and queries it as to whether job recovery is supported.
-If a committer does support recovery.
 
-The state of the previous job attempt is rebuilt from reading the
-``Job History'' file;
-a log of the events saved during the execution.
-This history records all tasks which successfully committed, and which could
+If a committer does support recovery.,
+the state of the previous job attempt is rebuilt from reading the
+``Job History'' file.
+This file is a log of the events saved during the execution, including
+a record of all tasks which successfully committed, and which could
 therefore be recovered.
 The Job Committer's \texttt{recoverTask(TaskAttempt)} method is called
 for each of these tasks.
@@ -396,11 +396,15 @@ All unexecuted, uncommitted or unrecoverable tasks are scheduled for execution.
 
 If job recovery is not support the entire job is re-executed.
 
+As the probability of the Job Manager failing is, excluding bugs in the code itself,
+a function of job time, rather than scale, recovering from job failure is more
+important on long lived jobs ---those which last many hours.
+
 \subsubsection{Bad Records}
 
-To avoid an entire task and hence job failing due to a single unprocesseable record,
+To avoid an entire task, and hence job, failing due to a single unprocesseable record,
 task attempts may skip records whose processing raises an exception.
-If the number of skipped records in task attempt is below some threshold
+If the number of skipped records in a task attempt is below some threshold
 threshold, these records will not result in a task attempt reporting itself as
 having failed.
 This is not of direct relevance to the commit protocol except as a
@@ -408,6 +412,8 @@ reason for a task attempt to fail.
 
 \section{Hadoop's FileOutputCommitter}
 \label{sec:fileoutputcommitter}
+
+
 
 The operations to commit the work, the Task Commit and the Job Commit,
 are all implemented in the same class, an implementation of \texttt{OutputCommitter}.
@@ -441,7 +447,6 @@ job output directory;
 the job commit operation does nothing but create a marker file.
 This is faster, but intermediate work is visible.
 The task commit operation is no longer atomic, changing failure modes.
-
 
 %\begin{table}
 %  \caption{Attributes of the \texttt{FileOutputCommitter} algorithms}
@@ -784,8 +789,6 @@ to a specific destination, something which is checked for during job submission.
 
 
 \textbf{Job Recovery}
-
-
 
 The v1 committer can recover from a failed job attempt, with the
 second attempt being able to reuse the output of all committed tasks from
@@ -2158,6 +2161,9 @@ a file with overwrite=false, because against S3, there is no atomic
 Instead we rely on the higher level requirement that any committed task attempt must
 constitute a valid outcome, and argue that the pending set from either attempt
 must constitute a valid result of a task.
+
+
+\TODO{This para is false}
 
 It's notable that this process could be improved were the job commit
 operation supplied with a list of successful task attempts;
