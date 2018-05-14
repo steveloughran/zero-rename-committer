@@ -1,5 +1,17 @@
-% a_zer_rename_committer.tex
 \documentclass[conference]{IEEEtran}
+
+%    _      _____                    ____
+%   / \    |__  /___ _ __ ___       |  _ \ ___ _ __   __ _ _ __ ___   ___
+%  / _ \     / // _ \ '__/ _ \ _____| |_) / _ \ '_ \ / _` | '_ ` _ \ / _ \
+% / ___ \   / /|  __/ | | (_) |_____|  _ <  __/ | | | (_| | | | | | |  __/
+%/_/   \_\ /____\___|_|  \___/      |_| \_\___|_| |_|\__,_|_| |_| |_|\___|
+%
+%  ____                          _ _   _
+% / ___|___  _ __ ___  _ __ ___ (_) |_| |_ ___ _ __
+%| |   / _ \| '_ ` _ \| '_ ` _ \| | __| __/ _ \ '__|
+%| |__| (_) | | | | | | | | | | | | |_| ||  __/ |
+% \____\___/|_| |_| |_|_| |_| |_|_|\__|\__\___|_|
+
 %\usepackage{babel}
 \usepackage{graphicx}
 \usepackage{color}
@@ -427,7 +439,8 @@ atomic task commit and the ability to explicitly recover the output generated
 by the committed tasks of a failed job attempt.
 
 The ``v2'' algorithm was added in 2015, as its predecessor was found
-to have scaleablity problems for jobs with tens of thousands of files \cite{MAPREDUCE-4815}.
+to have scaleablity problems for jobs with tens of thousands of files
+\ \cite{MAPREDUCE-4815}.
 While the v2 algorithm can deliver better performance, it comes at the price of
 reduced isolation of output.
 
@@ -478,7 +491,7 @@ The task commit operation is no longer atomic, changing failure modes.
     \textbf{name} & \textbf{meaning} \\
     $fs$ & Destination filesystem \\
     $destPath$ & Job Output Directory in the destination filesystem. \\
-    $jobId$ & Numeric Job ID $\geq$ 0; no uniqueness guarantee \\
+    $jobId$ & Numeric Job ID $\geq$ 0; expected to be unique for all application instances in the cluster. \\
     $jobAttemptId$ & $JobID_\$counter$; Counter starts at 0 for a job and increments on each attempt.\\
     $jobAttemptPath$ & a path under which a job attempt may store any data.\\
     $partId$ & Numeric value of partition of data to be allocated to a task.\\
@@ -959,7 +972,7 @@ verification that the destination directory does not exist in the
 the client-side job submission, and the creation of that directory during
 the \texttt{setupJob()} operation.
 In a busy cluster there can be a delay between the scheduling of the job and
-its application manager actually starting to execute...
+its application manager actually starting to execute\ldots
 a second, conflicting, job may also be scheduled at this point.
 If the destination directory were to be created during job submission,
 this window would be nearly completely eliminated.
@@ -2011,7 +2024,7 @@ First, a definition of correct behavior must be defined.
   After a successful invocation of \texttt{commitJob()},
   the destination directory tree must only contain the output of successfully
   committed tasks.
-  \emph{``And not what wasn't''}
+  \emph{``And not what wasn't''}.
 \end{paragraph}
 
 \begin{paragraph}
@@ -2077,16 +2090,28 @@ This definition of correctness omits some constraints:
   \item The job commit operation is atomic.
   Rationale: The v1 commit algorithm does not meet this requirement.
 
+  \item Concurrent jobs writing to the same destination will succeed and
+  produce output equivalent to a serialized commit of the the jobs.
+  Rationale: neither FileOutputCommitter commit algorithm offers such guarantees.
 \end{itemize}
 
 The implication of not requiring these constraints is that the higher-level
 commit protocol must react to failures or timeouts of the task and job
 commit operations.
 
+%Concurrency cannot easily be handled in the commit protocol except through
+%some mechanism of obtaining an exclusive lock of operations
+%on the destination path, one shared with all applications which may write
+%to that path.
+%Directory existence may be such an option for filesystems
+%supporting an atomic check-and-create \tt{mkdir()} call, though it is not
+%a check which the \tt{FileOutputCommitter} directly performs.
+
+
 We do not attempt provide a formal proof of the correctness of the algorithms.
 A TLA+ specification of the behavior of a consistent object store was created
 during the process, however we have not completed that with the algorithm specifications.
-Modelling an eventually consistent somewhat is somewhat challenging.
+Modelling an eventually consistent somewhat is ``somewhat challenging''.
 
 In the absence of proofs,
 here are our informal assertions about the correctness of the two algorithms.
@@ -2151,7 +2176,7 @@ That is:
 
 Reviewing this code, there appears to be a small race condition in job commit,
 wherein a task attempt partitioned from the Job Manager during task commit
-can still complete it's PUT of its list of uploads to commit, the ``pending set'',
+can still complete its PUT of its list of uploads to commit, the ``pending set'',
 overwriting that of the task attempt which had considered itself successful.
 
 We cannot defend against that with the traditional strategy of creating
@@ -2294,7 +2319,7 @@ bandwidth constrained.
 
 Job commit time is that of the Staging Committer, proceeded by a listing
 of and reading in of the pending files of every committed task.
-This is again a few hundred milliseconds per file, though parallelisation
+This is again a few hundred milliseconds per file, though parallelization
 can reduce the delay.
 
 Ignoring throttling, the Magic Committer is best with tasks which create
@@ -2408,7 +2433,7 @@ information needed to enhance the protocols robustness.
 An extended  \texttt{commitTask()} operation should return the (opaque) information
 needed for the \texttt{commitJob()} method to validate the correctness and
 completeness of the operation;
-the standard committers should then validate their final output directories.
+The job committer can then validate the content of the final output directory.
 
 Were the committers also declare their ability to recover from a failed task commit,
 as they do for job recovery, then query engines would be able to choose the safe
@@ -2465,7 +2490,7 @@ To avoid the failure semantics of Spark's \texttt{Direct Output Committer},
 every remapped file is given a name which inserted the job and task attempt IDs,
 while still preserving the sort order.
 Failed and aborted tasks and jobs can then be cleaned up by their successors.
-Stocator also generats a JSON-formatted \SUCCESS file, which offers
+Stocator also generates a JSON-formatted \SUCCESS file, which offers
 the ability to obtain a consistent list of the final files committed by a job,
 even in the presence of listing inconsistency.
 
@@ -2476,13 +2501,12 @@ the \SUCCESS file.
 The actual implementation is achieved by misleading the classic committer,
 changing the semantics of file creation under the task attempt directories
 under the \texttt{\_temporary} path.
-The committer believes that it tasks are
- writing files to a temporary destination and renaming them, when
-in fact they are being written direct to the final destination directory,
+The committer believes that it tasks are writing files to a temporary destination
+and renaming them, when in fact they are being written direct to the final destination directory,
 with a task-attempt-specific filename.
 
-The rename operations of the the committer are then implicitly omitted:
-there is no work to rename.
+The filesystem \texttt{rename()} operations of the the committer are then implicitly
+omitted: there is no work to rename.
 
 Note that Stocator's task commit operation is a no-op, thus repeatable.
 Job commit is a listing of the output and generation of the manifest;
@@ -2673,7 +2697,7 @@ their work that this work is ready for others to use.
 % Bibliography. Include
 
 \bibliographystyle{IEEEtran}
-\bibliography{bibliography.bib}
+\bibliography{bibliography}
 
 
 \end{document}
