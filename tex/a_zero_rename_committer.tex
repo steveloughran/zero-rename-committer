@@ -1,16 +1,16 @@
 \documentclass[conference]{IEEEtran}
 
-%    _      _____                    ____
-%   / \    |__  /___ _ __ ___       |  _ \ ___ _ __   __ _ _ __ ___   ___
-%  / _ \     / // _ \ '__/ _ \ _____| |_) / _ \ '_ \ / _` | '_ ` _ \ / _ \
-% / ___ \   / /|  __/ | | (_) |_____|  _ <  __/ | | | (_| | | | | | |  __/
-%/_/   \_\ /____\___|_|  \___/      |_| \_\___|_| |_|\__,_|_| |_| |_|\___|
+%     _      _____                    ____
+%    / \    |__  /___ _ __ ___       |  _ \ ___ _ __   __ _ _ __ ___   ___
+%   / _ \     / // _ \ '__/ _ \ _____| |_) / _ \ '_ \ / _` | '_ ` _ \ / _ \
+%  / ___ \   / /|  __/ | | (_) |_____|  _ <  __/ | | | (_| | | | | | |  __/
+% /_/   \_\ /____\___|_|  \___/      |_| \_\___|_| |_|\__,_|_| |_| |_|\___|
 %
-%  ____                          _ _   _
-% / ___|___  _ __ ___  _ __ ___ (_) |_| |_ ___ _ __
-%| |   / _ \| '_ ` _ \| '_ ` _ \| | __| __/ _ \ '__|
-%| |__| (_) | | | | | | | | | | | | |_| ||  __/ |
-% \____\___/|_| |_| |_|_| |_| |_|_|\__|\__\___|_|
+%   ____                          _ _   _
+%  / ___|___  _ __ ___  _ __ ___ (_) |_| |_ ___ _ __
+% | |   / _ \| '_ ` _ \| '_ ` _ \| | __| __/ _ \ '__|
+% | |__| (_) | | | | | | | | | | | | |_| ||  __/ |
+%  \____\___/|_| |_| |_|_| |_| |_|_|\__|\__\___|_|
 
 %\usepackage{babel}
 \usepackage{graphicx}
@@ -48,13 +48,16 @@ Object-storage as a Destination\\ for Apache Hadoop and Spark}
 % Yes, this titling is broken
 \author{
   Loughran, Steve
-  \texttt{stevel@hortonworks.com}\\
+  \texttt{stevel@cloudera.com}\\
 \and
   Blue, Ryan
   \texttt{rblue@netflix.com}\\
 \and
   Radia, Sanjay
-  \texttt{sanjay@hortonworks.com}
+  \texttt{sanjay@cloudera.com}
+\and
+  Demoor, Thomas
+  \texttt{thomas.demoor@wdc.com}
 }
 
 \date{December 2017}
@@ -106,7 +109,7 @@ to a calculated final destination.
 It has long been a core requirement of ``Big Data'' computation platforms that
 the source and destination of data was a fully consistent distributed filesystem.
 
-Distributed, because data needs to be readable and writeable by the distributed
+Distributed, because data needs to be readable and writable by the distributed
 processes executing a single query across the cluster of computers.
 Consistent, because all machines across the cluster need to be able to
 list and read data written by any of the others.
@@ -439,7 +442,7 @@ atomic task commit and the ability to explicitly recover the output generated
 by the committed tasks of a failed job attempt.
 
 The ``v2'' algorithm was added in 2015, as its predecessor was found
-to have scaleablity problems for jobs with tens of thousands of files
+to have scalablity problems for jobs with tens of thousands of files
 \ \cite{MAPREDUCE-4815}.
 While the v2 algorithm can deliver better performance, it comes at the price of
 reduced isolation of output.
@@ -999,7 +1002,8 @@ by the single Job Manager.
 \end{figure*}
 
 
-When a failure of an executor is detected (\TODO: how?); all active tasks will be rescheduled.
+When a failure of an executor is detected by loss of its heartbeat,
+all active tasks will be rescheduled.
 As the failure may be a network partition, multiple task attempts may be active
 simultaneously.
 It is therefore a requirement that no data is promoted until a task attempt is actually
@@ -2188,14 +2192,14 @@ constitute a valid outcome, and argue that the pending set from either attempt
 must constitute a valid result of a task.
 
 
-\TODO{This para is false}
 
 It's notable that this process could be improved were the job commit
 operation supplied with a list of successful task attempts;
 this would avoid inferring this state from the filesystem, except in
 the case of job recovery from a commit algorithm capable of
 rebuilding its state from a directory listing (i.e.\ the v1 committer).
-Spark's protocol already permits this, but not Hadoop's.
+Spark's protocol already permits this, but not Hadoop's
+\ \footnote{We believe the EMR Committer does this}.
 
 Regarding the requirement to abort safely, the fact that all writes are
 not manifest until job commit means that the any writes from failed tasks
@@ -2329,6 +2333,15 @@ amount of storage needed in the virtual machine, VM and Container instances
 with smaller amounts of storage can be request, or simply more tasks executed
 per VM: computation, RAM and network bandwidth are the bottlenecks.
 
+In production use, we have found that the default size of the HTTP thread
+pool becomes a bottleneck in the job commit phase for any queries
+containing many thousands of files.
+The small-payload POST requests are executed in parallel for higher
+throughput, but the default limit on the number of HTTP connections, 15, 
+limits that parallelization.
+Increasing this value to a larger number, such as 50 to 100, significantly
+speeds up this phase of a query. 
+
 One final feature to highlight is the ``partitioned committer'' variant
 of the Staging Committer, which is designed to update an existing
 dataset in-place, only considering conflict with existing data in
@@ -2373,7 +2386,7 @@ This is probably a bug in Hadoop ---and straightforward to correct.
 
 The first check is a defense against an errant process filling the local
 filesystem with data;
-the latter are symptoms of and reaction to different failures (loss of manager/network failure)
+the latter are symptoms of ---and reaction to--- different failures (loss of manager/network failure)
 and restarted manager with no knowledge of active task, respectively.
 There is also the without-warning failures triggered by the operating system
 if limits on the execution environment are exceeded: usually memory allocation.
@@ -2465,6 +2478,9 @@ commit algorithms written to work with them.
 \section{Related Work}
 \label{sec:related-work}
 
+\subsection{Spark's Direct Output Committer}
+\label{subsec:direct-output}
+
 Apache Spark (briefly) offered a zero rename committer,
 the \emph{Direct Output Committer}\ \cite{SPARK-6352}.
 With this committer, output was written directly to the destination directory;
@@ -2480,6 +2496,10 @@ was valued by users, even if one which failed to offer the complete semantics
 of a commit protocol.
 Alternatively: performance is observable, whereas consistency and failures
 are not considered important until they surface in production systems.
+
+\subsection{IBMs's Stocator}
+\label{subsec:stocator}
+
 
 IBM's Stocator eliminates renames by also having a direct write to the
 destination\ \cite{Stocator}.
@@ -2508,9 +2528,11 @@ with a task-attempt-specific filename.
 The filesystem \texttt{rename()} operations of the the committer are then implicitly
 omitted: there is no work to rename.
 
-Note that Stocator's task commit operation is a no-op, thus repeatable.
+
+Stocator's task commit operation is a no-op, thus repeatable.
 Job commit is a listing of the output and generation of the manifest;
 as the manifest PUT is atomic, the job commit itself is atomic.
+
 
 What is critical for Stocator is that the output of all failed tasks
 is cleaned up, \TODO \emph{WHERE?}.
@@ -2522,12 +2544,19 @@ and presumably clean up.
 Before that commit and cleanup phase, the destination directory will contain
 data from the ongoing, uncommitted task.
 
+Compared to the other designs, this is unique in that it retrofits an
+object-store-optimized  committer under the MapReduce V1 and V2 commit algorithms.
+Thus existing applications can switch to the new committer without needing
+explicit changes.
+This makes it significantly easier to adopt.
+
+
 The closest of the two S3A committers is the Magic Committer.
 It too modifies the object store connector to write the output to a
 different destination than the path requested
 in the user's code \texttt{createFile(path)} call.
 
-However, the magic committer, does not attempt to mislead the existing committer,
+The Magic Committer, does not attempt to work underneath the existing committer,
 instead we provide our own store-aware committer
 which ensures that output is not actually manifest until
 the final job is committed.
@@ -2535,19 +2564,83 @@ Thus it provides the standard semantics of task and job commit: no data is
 visible until the job is committed, and partitioned task attempts will
 never make changes to the visible file set.
 
+\subsection{Amazon's EMRFS S3-optimized Committer}
+\label{subsec:emrfs-committer}
+
+In November 2018, Amazon announced they had implemented their own S3-specific
+committer for Apache Spark \cite{AWS-EMR-committer}.
+
+\begin{quote}
+\emph{
+The EMRFS S3-optimized committer is used for Spark jobs that use Spark SQL,
+DataFrames, or Datasets to write Parquet files.}
+\end{quote}
+
+The documentation contains three assertions:-
+
+\begin{itemize}
+  \item "Improves application performance by avoiding list and rename operations"
+  \item "Lets you safely enable the speculative execution of idempotent tasks in Spark jobs to help reduce the performance impact of task stragglers."
+  \item "Avoids issues that can occur with Amazon S3 eventual consistency during job and task commit phases, and helps improve job correctness under task failure conditions.
+\end{itemize}
+
+The documentation goes on warn that each outstanding 
+file consumes a small amount of memory in the Spark Driver process,
+and that as they use the Multipart Upload mechanism for
+atomically writing individual files, applications must clean up their
+destination buckets regularly to avoid large bills.
+
+No information is provided as to the specific algorithm, nor any evidence
+as to its correctness.
+Being closed source, we ourselves cannot examine
+the code to determine for ourselves whether or the algorithm meets the
+criteria we have declared constitutes correctness.
+
+The fact that memory is being used per file hints that the list
+of pending files is returned by each successfully committed task
+the spark driver, as the Spark commit protocol permits.
+The job committer stores this list in memory, then, on job-commit, 
+completes each upload.
+
+Failed/aborted tasks cannot list their output: it will falls on the
+task committers to clean up on abort requests, and the job committer to
+list and cancel all multipart uploads outstanding against an output directory
+once the uploads initiated by the committed tasks have all been completed.
+
+What is not known is at what point in an individual task are the output files
+written to the object store.
+That is: are they written directly as per Stocator and the "Magic Commit" algorithm,
+or  are they written to the local filesystem and then uploaded in the task's 
+task commit phase?
+
+We do not not known the specifics, and can only speculate.
+
+In the absence of any published code or documentation of the algorithm, Amazon's
+claims must be taken on trust, and, when a behavior was not claimed,
+consider that behavior as unknown.
+
+Given that the committer actually shipped more than six months
+after an Apache Software Foundation released the S3A committers
+\ \cite{HADOOP-S3A-Committers}, we fail to see _why_ this committer code
+has not been published, so that its correctness can be determined.
+
+Potential users of the EMR committer are strongly encourage to contact
+the AWS team for clarification on these issues, ---at least if they consider
+important that the correctness of their queries to be important..
+
 
 \begin{table}
-  \begin{tabular}{ l c c c }
+  \begin{tabular}{ l c c c c }
     \hline
-    & \textbf{Direct} & \textbf{Stocator} & \textbf{S3A}\\
-    Speculative Tasks & False & True & True \\
-    Recoverable Job   & False & False & False \\
-    Abortable Task    & False & True & True  \\
-    Abortable Job     & True & True & True  \\
-    Incomplete work observable & True & True & False\\
-    Atomic Task Commit & True & True & True \\
-    Atomic Job Commit & True & True & False \\
-    Partitioned Executor resilience & False & False & True \\
+    & \textbf{Direct} & \textbf{Stocator} & \textbf{S3A} & \textbf{EMR}\\
+    Speculative Tasks & False & True & True & Claimed \\
+    Recoverable Job   & False & False & False & Claimed \\
+    Abortable Task    & False & True & True & Unknown \\
+    Abortable Job     & True & True & True & Unknown \\
+    Incomplete work observable & True & True & False & Unknown\\
+    Atomic Task Commit & True & True & True & Unknown \\
+    Atomic Job Commit & True & True & False & Unknown \\
+    Partitioned Executor resilience & False & False & True & Unknown\\
     \hline
   \end{tabular}
 \caption{Attributes of the different committer algorithms}
@@ -2557,6 +2650,7 @@ never make changes to the visible file set.
 
 The Direct Committer fails at the foundational requirement: ability to support
 speculative or restarted task attempts.
+This is why it was removed.
 
 Stocator also writes to the destination directory, but by renaming the output
 files retains the ability to clean up the output of uncommitted tasks.
@@ -2568,7 +2662,6 @@ into the destination directory.
 Neither committer is performing any operation in task commit other than creating
 a \SUCCESS marker, which is both atomic and repeatable.
 
-
 The key differences of the S3A committers are that the written files are
 not observable in the destination directory tree until Job commit.
 The classic file output committers postpone this until task (v2) or job (v1)
@@ -2577,6 +2670,9 @@ commit, and use rename as the low-cost operation to promote the files.
 
 The Direct and Stocator committers avoid the rename, at the expense of making
 the output visible even before job commit.
+
+The EMR Committer appears to have reimplemented the S3A committer design.
+We hope they have re-implemented its semantics.
 
 One recurrent theme here is that the output of a job is defined as
 ``the contents of the job output directory'', thus all committers are
@@ -2685,7 +2781,7 @@ We hope this document is a start, while warning readers that it is non-normative
 \label{sec:acknowledgements}
 
 We are grateful for the contributions of all reviewers and testers, especially
-Aaron Fabbri, Thomas Demoor and Ewan Higgs.
+Aaron Fabbri and Ewan Higgs.
 We must also highlight the contributions of our QE teams: it is through
 their work that this work is ready for others to use.
 
