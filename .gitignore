@@ -221,3 +221,8 @@ TSWLatexianTemp*
 
 target/
 out/
+
+.classpath
+.project
+.settings
+.settings/

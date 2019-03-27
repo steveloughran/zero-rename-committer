@@ -99,6 +99,13 @@ object store client to recognise some output paths as special (``magic''), and
 so translating writes to these paths as initiating a delayed-completion write
 to a calculated final destination.
 
+In order to evaluate the correctness of our work, we provide a definition
+of \emph{Correctness} ---the requirements of a committer for safe integration
+with Hadoop MapReduce and Spark.
+As well as demonstrating that our new committers meet these requirements,
+we show that one of the committers which ships with Hadoop, ``The V2 committer''
+  does not.
+
 \end{abstract}
 
 % ========================================================================
@@ -2529,7 +2536,7 @@ The filesystem \texttt{rename()} operations of the the committer are then implic
 omitted: there is no work to rename.
 
 
-Stocator's task commit operation is a no-op, thus repeatable.
+Stocator's task commit operation becomes a no-op, thus trivially repeatable.
 Job commit is a listing of the output and generation of the manifest;
 as the manifest PUT is atomic, the job commit itself is atomic.
 
@@ -2545,7 +2552,7 @@ Before that commit and cleanup phase, the destination directory will contain
 data from the ongoing, uncommitted task.
 
 Compared to the other designs, this is unique in that it retrofits an
-object-store-optimized  committer under the MapReduce V1 and V2 commit algorithms.
+object-store-optimized committer under the MapReduce V1 and V2 commit algorithms.
 Thus existing applications can switch to the new committer without needing
 explicit changes.
 This makes it significantly easier to adopt.
@@ -2568,7 +2575,8 @@ never make changes to the visible file set.
 \label{subsec:emrfs-committer}
 
 In November 2018, Amazon announced they had implemented their own S3-specific
-committer for Apache Spark \cite{AWS-EMR-committer}.
+committer for Apache Spark \cite{AWS-EMR-committer}, with an article
+in March 2019 providing more detail AWS-EMR-committer-blog  \cite{AWS-EMR-committer}.
 
 \begin{quote}
 \emph{
@@ -2584,17 +2592,33 @@ The documentation contains three assertions:-
   \item "Avoids issues that can occur with Amazon S3 eventual consistency during job and task commit phases, and helps improve job correctness under task failure conditions.
 \end{itemize}
 
-The documentation goes on warn that each outstanding 
-file consumes a small amount of memory in the Spark Driver process,
-and that as they use the Multipart Upload mechanism for
-atomically writing individual files, applications must clean up their
-destination buckets regularly to avoid large bills.
 
-No information is provided as to the specific algorithm, nor any evidence
-as to its correctness.
-Being closed source, we ourselves cannot examine
-the code to determine for ourselves whether or the algorithm meets the
-criteria we have declared constitutes correctness.
+Without the source being available to examine, we can only infer aspects
+of its behaviour from the documentation.
+
+The 2019 article is the most informative, as are some hints in.
+
+\begin{itemize}
+  \item Data is uploaded as multipart uploads, which are not made visible at the time of writing.
+  \item The list of pending uploads is built up the task committers, hence consumes memory in the worker process \cite{AWS-EMR-committer-tuning}.
+  \item The manifestation of the files, by completing the multipart upload, is performed in the individual task commit operations.
+  \item The job commit operation simply becomes one of writing the \texttt{_SUCCESS)} file, and, hopefully, listing and aborting any incomplete
+  multipart uploads in progress under the destination path.
+
+\end{itemize}
+
+Because no data is made visible until the task commit is executed, the output
+of any in-progress tasks is not visible: speculative execution is safe,
+as is reattempts of any task which failed up to the point of the task commit.
+
+However, because the uploads are completed in the task commit operation,
+the output of each committed task is visible.
+Furthermore, because the commit operation is not-atomic, the operation may
+fail partway through, which will trigger a new task attempt, which
+will then commit its work into a destination of unknown state.
+
+% TODO: fill this in
+
 
 The fact that memory is being used per file hints that the list
 of pending files is returned by each successfully committed task
@@ -2607,26 +2631,6 @@ task committers to clean up on abort requests, and the job committer to
 list and cancel all multipart uploads outstanding against an output directory
 once the uploads initiated by the committed tasks have all been completed.
 
-What is not known is at what point in an individual task are the output files
-written to the object store.
-That is: are they written directly as per Stocator and the "Magic Commit" algorithm,
-or  are they written to the local filesystem and then uploaded in the task's 
-task commit phase?
-
-We do not not known the specifics, and can only speculate.
-
-In the absence of any published code or documentation of the algorithm, Amazon's
-claims must be taken on trust, and, when a behavior was not claimed,
-consider that behavior as unknown.
-
-Given that the committer actually shipped more than six months
-after an Apache Software Foundation released the S3A committers
-\ \cite{HADOOP-S3A-Committers}, we fail to see _why_ this committer code
-has not been published, so that its correctness can be determined.
-
-Potential users of the EMR committer are strongly encourage to contact
-the AWS team for clarification on these issues, ---at least if they consider
-important that the correctness of their queries to be important..
 
 
 \begin{table}
@@ -2637,10 +2641,11 @@ important that the correctness of their queries to be important..
     Recoverable Job   & False & False & False & Claimed \\
     Abortable Task    & False & True & True & Unknown \\
     Abortable Job     & True & True & True & Unknown \\
-    Incomplete work observable & True & True & False & Unknown\\
-    Atomic Task Commit & True & True & True & Unknown \\
-    Atomic Job Commit & True & True & False & Unknown \\
-    Partitioned Executor resilience & False & False & True & Unknown\\
+    Uncommitted task output observable & True & True & False & False \\
+    Committed task output observable & True & True & False & True\\
+    Atomic Task Commit & True & True & True & False \\
+    Atomic Job Commit & True & True & False & True \\
+    Partitioned Executor resilience & False & False & True & False\\
     \hline
   \end{tabular}
 \caption{Attributes of the different committer algorithms}
