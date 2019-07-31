@@ -2112,15 +2112,15 @@ First, a definition of correct behavior must be defined.
 \end{paragraph}
 
 
-The continuity-of-correctness requirement excludes that of a failed job.
-We depend here upon the restriction that job will not commit its work unless
+The \emph{continuity-of-correctness} requirement excludes that of a failed job.
+We depend here upon the restriction that a job will not commit its work unless
 a heartbeat has been received in a predefined time interval from the YARN ResourceManager.
 Assuming all clocks move forward at approximately the same rate, if a job has
 not received/responded to heartbeats outside that interval,
 we can can conclude that the process will no longer commit work.
 This failure to respond to heartbeats triggers YARN rescheduling a new
 instance of the Job Manager and an attempt to kill the previous attempt.
-A second Job attempt may conclude from the very fact that it has been launched
+A second job attempt may conclude from the very fact that it has been launched
 that the previous job attempt will not attempt to commit its work
 \footnote{the monotonically increasing YARN attempt ID value implicitly
 informs the Job whether or not it is the first attempt}.
@@ -2158,8 +2158,12 @@ commit operations.
 
 We do not attempt provide a formal proof of the correctness of the algorithms.
 A TLA+ specification of the behavior of a consistent object store was created
-during the process, however we have not completed that with the algorithm specifications.
-Modelling an eventually consistent somewhat is ``somewhat challenging''.\{
+during the process, however we have not completed that with any
+algorithm specifications\ \cite{s3-tla}.
+Modelling an eventually consistent somewhat is ``somewhat challenging''
+At the same time, it is fundamentally impossible to demonstrate through testing
+that the algorithms are correct in the presence of inconsistency ---so arguing
+strongly for that correctness proof.
 
 In the absence of proofs,
 here are our informal assertions about the correctness of the two algorithms.
@@ -2190,6 +2194,16 @@ then cancel all other multipart uploads pending against the directory tree.
 This will cancel the pending work of all tasks attempts which have uploaded staged
 data, but which were somehow not included in the list of committed tasks.
 That is: they failed during the task commit process.
+
+Because HDFS is used to propagate the lists of uncommitted files from
+committed task attempts to the job committer, there is no requirement for
+a consistent view of the object store during the actual job.
+For the results of a successful job to be safely used by another application,
+something must still present a consistent view of the results, or
+the interval between the publishing of the results and their use must be sufficient
+for the users to be \emph{confident} that the store is now consistent,
+or at least optimistic\ \cite{Bermbach:2014:BEC:2624303.2624662}.
+
 
 
 \subsubsection{Correctness of the Magic Committer}
@@ -2234,7 +2248,6 @@ a file with overwrite=false, because against S3, there is no atomic
 Instead we rely on the higher level requirement that any committed task attempt must
 constitute a valid outcome, and argue that the pending set from either attempt
 must constitute a valid result of a task.
-
 
 
 It's notable that this process could be improved were the job commit
