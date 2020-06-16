@@ -1892,14 +1892,14 @@ which is still in the \texttt{__magic} directory.
     $Pending \longleftarrow Pending + \{$ \loadPendingFile(\fs, $f$) $\}$\;
   }
 
-  \savePendingSet(\fs, \jobAttemptPath + $taskAttemptId$, $Pending$)\;
+  \savePendingSet(\fs, \jobAttemptPath + $taskId$, $Pending$)\;
 
 \caption{MagicCommitter.commitTask()}
 \label{alg:MagicCommitter.commitTask}
 
 \end{procedure}
 
-Because the .\texttt{.pendingset} file is written in a single atomic PUT, the
+Because the \texttt{.pendingset} file is written in a single atomic PUT, the
 commit of an individual task attempt is atomic.
 
 If there are no .\texttt{.pendingset} files, the saved \texttt{.pendingset} file
