@@ -939,8 +939,8 @@ they have been isolated here for clarity.
     }
   }
 
-\label{alg:mergePathsV2}
 \caption{mergePathsV2(fs, rc, dest)}
+\label{alg:mergePathsV2}
 
 \end{procedure*}
 % ------------------------------------------------------------
@@ -2842,6 +2842,164 @@ We are grateful for the contributions of all reviewers and testers, especially
 Aaron Fabbri and Ewan Higgs.
 We must also highlight the contributions of our QE teams: it is through
 their work that this work is ready for others to use.
+
+% ========================================================================
+
+
+\section{Appendix: what went wrong?}
+\label{sec:appendix}
+
+
+What problems actually surfaced in production?
+
+It's interesting to reflect on these as they show where
+the trouble rises.
+Scale and Concurrency are the recurrent themes.
+
+\subsection{Scale}
+\label{subsec:scale}
+
+\subsubsection{Out of memory if too much work is done}
+
+Scale issues surfaced in the 10TB TPC-DS benchmarks during dataset generation
+for performance testing.
+
+HADOOP-16570. S3A committers encounter scale issues
+The job commit process loaded the data from all completed tasks into memory,
+validated them, then committed the uploads in a thread pool.
+
+If a sufficiently large enough number of tasks created a sufficiently large
+enough number of files, each with a sufficiently long enough list of blocks
+(and hence etags), the job committer would run out of memory.
+
+Fix: incremental load-and-commit of each task's files.
+
+This means that the validation phase
+(are all the .pendingset files parseable? valid?) is no longer performed
+prior to job commit unless explicitly requested.
+
+\subsubsection{Progress callbacks}
+
+HADOOP-15961: S3A committers: make sure there's regular progress()
+
+The staging committers were not sending progress heartbeat callbacks
+to the execution engine during their upload of files.
+If the execution engine considered the task commit to have timed out
+it would consider the attempt a failure and reschedule a second one.
+Which, would of course be at risk of the same problem.
+
+
+HADOOP-16570. S3A committers leak threads/raises OOM on job/task commit at scale
+https://issues.apache.org/jira/browse/HADOOP-16570
+
+The thread pool created in each committer for parallel execution wasn't being
+cleaned up, and eventually long-lived spark processes would run out of memory,
+usually at a random point in job commit.
+
+Fixing this was tricky as there's no explicit method on committers which
+execution engines invoke to say "we are done".
+The straightforward fix triggered a shutdown in the job and task completion
+operations, with the pool created on-demand in the commit phases.
+
+This straightforward fix led to
+
+HADOOP-16798: job commit failure in S3A MR magic committer test
+https://issues.apache.org/jira/browse/HADOOP-16798
+
+This issue did surface in the test phase, but only on development systems
+where the test suite was running enough of the tests in parallel that the
+CPU was overloaded. As a result of the overload, occasionally a task would
+time out...MapReduce would then call taskAbort()
+
+\subsection{Concurrent jobs}
+\label{subsec:concurrent-jobs}
+
+Problems ``near'' each other related to concurrent job execution surfaced.
+
+\subsubsection{Concurrent jobs and the Magic Committer}
+
+Problem 1: parallel writes to the same destination directory with the Magic Committer.
+
+The Magic committer cleaned up all pending uploads,
+operating on the same assumption of the classic Hadoop FileOutputCommitter
+\em{only one job can be writing to the same destination directory at a time}.
+Some users chose to run the committer targeting the same destination, which,
+because of that cleanup, meant the second job to commit would fail, as all
+files uploaded before job2 was committed were lost.
+
+Fixing this was straightforward: provide an option to not delete incomplete
+uploads.
+During job setup, the job committer would also list pending
+uploads, printing them and the upload initiation date.
+This is to provide some insight to users on whether (billed) incomplete uploads
+are accruing -and hence they should set up a lifecycle rule on the S3 bucket
+to delete incomplete uploads after a number of days.
+
+\subsubsection{Concurrent jobs and the Staging Committer}
+
+The Staging committer was always designed for parallel execution,
+with tunable conflict resolution policies to allow the caller to
+declare what to do if another job had written data to the same
+destination tree.
+
+Critical for this committer is the staging directory on the cluster filesystem.
+This must be
+
+\begin{itemize}
+    \item Accessible on all nodes executing work.
+    \item Known to all tasks across all nodes
+    \item Unique to all active jobs of that user.
+\end{itemize}
+
+The YARN "application ID" was used as the default unique ID.
+On a single-query MapReduce job, this is unique to the application
+for the life of the cluster, being composed of the tuple of
+\em{(YARN-cluster-launch-timestamp, application-launch-count)}.
+
+In Apache Spark applications, being long-lived, this jobId was not unique.
+Spark knows this ---and provides two forms of mitigation
+\begin{itemize}
+    \item A unique UUID set in the configuration option \texttt{spark.sql.sources.writeJobUUID}.
+    \item A dynamically generated job ID, using the current time in seconds as the cluster launch time.
+\end{itemize}
+
+Unfortunately, this turned out not to work.
+Changes in Spark's code over
+time meant that the \texttt{spark.sql.sources.writeJobUUID} was removed.
+This did not surface as a problem, because of the fallback to the jobID.
+Or at least: it did not surface as a problem during testing.
+In production use, however, the fact that two jobs started by the same user
+second would have the same jobID, hence use the staging directory,
+did eventually surface.
+
+Once identified, this was addressed as follows
+\begin{itemize}
+    \item Spark added a random long value to the timestamp, reducing the probability of a collision.
+    \item The removed option was reinstated in Spark.
+    \item The committer code was reviewed to make sure all paths would use the \texttt{spark.sql.sources.writeJobUUID} option if supplied.
+    \item A lot more logging about the origin of the unique ID was implemented, as well as control over the fallback process.
+\end{itemize}
+
+Fix #1 should suffice; the changes in the S3A committers ensure that even on spark releases without the fix there would be no conflict.
+Because different open source projects release on different cycles, having fixes
+in both projects ensures that anyone using the artifacts of the next release of either
+project gets a fixed committer.
+
+\subsubsection{Lack of reported progress on the magic committer}
+
+Spark reports progress of a job in terms of bytes written ---this number is determined by measuring the length of the files which task attempt wrote to.
+
+The Magic committer's file output size isn't visible until job commit -and will be on a different path.
+Spark was simply measuring the zero-byte marker files, so reporting 0 bytes of progress.
+
+The solution here again spanned projects: using HTTP object headers as a back-channel between the committer and the spark reporter.
+
+In Hadoop, the S3A FileSystem client was extended to return all the HTTP headers of an object through the \texttt{getXAttr(Path, String)} API call.
+The Magic committer was enhanced to add the count of bytes uploaded as an HTTP header attached to the marker file.
+And in Spark, the tracking code in \texttt{BasicWriteTracker} extended to query for the specific custom header through that \texttt{getXAttr()} method if the length of the file expected be created was zero bytes long.
+
+If the header was found and could be parsed to a positive long integer, it was reported as the byte count.
+As a result, the progress reporting now reports on the bytes uploaded, rather than the bytes currently visible in the store.
 
 % ========================================================================
 
