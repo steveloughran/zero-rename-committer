@@ -1,4 +1,10 @@
-\documentclass[format=acmsmall, screen=true, nonacm, timestamp, review=false]{acmart}
+\documentclass[conference]{IEEEtran}
+
+
+% BUILDING. Do not use ``latex''
+% USE
+%   pdflatex -shell-escape a_zero_rename_committer.tex
+
 
 %     _      _____                    ____
 %    / \    |__  /___ _ __ ___       |  _ \ ___ _ __   __ _ _ __ ___   ___
@@ -15,7 +21,7 @@
 %\usepackage{babel}
 \usepackage{graphicx}
 \usepackage{color}
-%\usepackage{cite}
+\usepackage{cite}
 %\usepackage{algorithmic}
 %\usepackage{algorithmicx}
 \usepackage[ruled,vlined,boxed]{algorithm2e}
@@ -41,22 +47,35 @@
 % ========================================================================
 
 
-\title{A Zero-Rename Committer}
+\title{
+    A Zero-Rename Committer:\\
+    Object-storage as a Destination\\ for Apache Hadoop and Spark}
 
+%\author{Steve Loughran}
+%\orcid{0000-0003-1856-0076}
+%\affiliation{Cloudera}
+%\email{stevel@apache.org}
+%\author{Ryan Blue}
+%\affiliation{Netflix}
+%\author{Sanjay Radia}
+%\affiliation{Cloudera}
+%\author{Thomas, Demoor}
+%\affiliation{Western Digital}
 
-\subtitle{Object-storage as a Destination for Apache Hadoop and Spark}
-
-\author{Steve Loughran}
-\orcid{0000-0003-1856-0076}
-\affiliation{Cloudera}
-\email{stevel@apache.org}
-\author{Ryan Blue}
-\affiliation{Netflix}
-\author{Sanjay Radia}
-\affiliation{Cloudera}
-\author{Thomas, Demoor}
-\affiliation{Western Digital}
-
+% Yes, this titling is broken
+\author{
+  Loughran, Steve
+  \texttt{stevel@apache.org}\\
+\and
+  Blue, Ryan
+  \texttt{rblue@netflix.com}\\
+\and
+  Radia, Sanjay
+  \texttt{sradia@apache.org}
+\and
+  Demoor, Thomas
+  \texttt{thomas.demoor@wdc.com}
+}
 
 %\author{
 %  Loughran, Steve
@@ -79,6 +98,7 @@
 \begin{document}
 
 
+\maketitle
 
 % ========================================================================
 
@@ -128,27 +148,10 @@ The requirements are
 
 
 As well as demonstrating that our new committers meet these requirements,
-we show that one of the committers which ships with Hadoop.
-Evaluating other object-store-specific committers, IBM's Stocator
-meets the requirements, while Amazon's EMRFS S3-optimized Committer does not
-appear to do so.
-Equally notably, one of the committers which ships in Hadoop and is broadly used,
-``The V2 committer'' does not meet these correctness criteria eiher.
-In both the EMR and Hadoop V2 committers, tasks publish their output directly
-into the destination during their task commit operations, through a sequence of
-operations.
-Any failure during such non-atomic task commits could leave the
-destination in an undefined state.
-
-The obvious mitigation technique is ``avoid these'', but it is also
-possible for the commit protocols to be extended to allow the committers
-to declare whether or not a failure during task commit is recoverable.
-The application could then use that information to react to a failure
-in a stricter way, such as failing the job, or restarting it entirely.
+we show that one of the committers which ships with Hadoop, ``The V2 committer''
+  does not.
 
 \end{abstract}
-
-\maketitle
 
 % ========================================================================
 
@@ -2734,7 +2737,7 @@ those files in the task commit rather than postponing it until the job is commit
 This will deliver performance benefits in larger applications ---at the cost
 of resilience to failures during that task commit operation.
 Without modifying Spark to fail the entire job in such an event, it is placing
-users at risk of corrupted output.
+users at risk of inconsistent output.
 
 
 One recurrent theme here is that the output of a job is defined as
@@ -2852,7 +2855,7 @@ their work that this work is ready for others to use.
 % ========================================================================
 
 
-\section{Appendix: what went wrong?}
+\section{Appendix: What happened in Production?}
 \label{sec:appendix}
 
 
@@ -2872,10 +2875,10 @@ for performance testing.
 
 HADOOP-16570. S3A committers encounter scale issues
 The job commit process loaded the data from all completed tasks into memory,
-validated them, then committed the uploads in a thread pool.
+validated them, then committed the uploads in parallel via a thread pool.
 
 If a sufficiently large enough number of tasks created a sufficiently large
-enough number of files, each with a sufficiently long enough list of blocks
+number of files, each with a sufficiently long enough list of blocks
 (and hence etags), the job committer would run out of memory.
 
 Fix: incremental load-and-commit of each task's files.
@@ -2884,19 +2887,12 @@ This means that the validation phase
 (are all the .pendingset files parseable? valid?) is no longer performed
 prior to job commit unless explicitly requested.
 
-\subsubsection{Progress callbacks}
+Note: this surfaced during large-scale Terasort benchmarking.
+It has never surfaced \emph{in the wild}.
 
-HADOOP-15961: S3A committers: make sure there's regular progress()
+\subsubsection{Thread Leakage}
 
-The staging committers were not sending progress heartbeat callbacks
-to the execution engine during their upload of files.
-If the execution engine considered the task commit to have timed out
-it would consider the attempt a failure and reschedule a second one.
-Which, would of course be at risk of the same problem.
-
-
-HADOOP-16570. S3A committers leak threads/raises OOM on job/task commit at scale
-https://issues.apache.org/jira/browse/HADOOP-16570
+HADOOP-16570. S3A committers leak threads/raises OOM on job/task commit at scale\ \cite{HADOOP-16570}.
 
 The thread pool created in each committer for parallel execution wasn't being
 cleaned up, and eventually long-lived spark processes would run out of memory,
@@ -2907,15 +2903,25 @@ execution engines invoke to say "we are done".
 The straightforward fix triggered a shutdown in the job and task completion
 operations, with the pool created on-demand in the commit phases.
 
-This straightforward fix led to
+This ``straightforward fix'' created a race condition between pool shutdown
+and work scheduling, which led to HADOOP-16798: job commit failure in S3A
+MR magic committer test\ \cite{HADOOP-16570}.
+Consult the JIRA for the details.
 
-HADOOP-16798: job commit failure in S3A MR magic committer test
-https://issues.apache.org/jira/browse/HADOOP-16798
 
-This issue did surface in the test phase, but only on development systems
-where the test suite was running enough of the tests in parallel that the
-CPU was overloaded. As a result of the overload, occasionally a task would
-time out...MapReduce would then call taskAbort()
+
+\subsubsection{Progress callbacks}
+\label{subsec:progress-callbacks}
+
+HADOOP-15961: S3A committers: make sure there's regular progress()
+
+The staging committers were not sending progress heartbeat callbacks
+to the execution engine during their upload of files.
+If the execution engine considered the task commit to have timed out
+it would consider the attempt a failure and reschedule a second one.
+Which, would of course be at risk of the same problem.
+
+
 
 \subsection{Concurrent jobs}
 \label{subsec:concurrent-jobs}
@@ -2928,7 +2934,7 @@ Problem 1: parallel writes to the same destination directory with the Magic Comm
 
 The Magic committer cleaned up all pending uploads,
 operating on the same assumption of the classic Hadoop FileOutputCommitter
-\em{only one job can be writing to the same destination directory at a time}.
+\emph{only one job can be writing to the same destination directory at a time}.
 Some users chose to run the committer targeting the same destination, which,
 because of that cleanup, meant the second job to commit would fail, as all
 files uploaded before job2 was committed were lost.
@@ -2941,7 +2947,7 @@ This is to provide some insight to users on whether (billed) incomplete uploads
 are accruing -and hence they should set up a lifecycle rule on the S3 bucket
 to delete incomplete uploads after a number of days.
 
-\subsubsection{Concurrent jobs and the Staging Committer}
+\subsubsection{Concurrent jobs and duplicate JobIDs}
 
 The Staging committer was always designed for parallel execution,
 with tunable conflict resolution policies to allow the caller to
@@ -2953,16 +2959,16 @@ This must be
 
 \begin{itemize}
     \item Accessible on all nodes executing work.
-    \item Known to all tasks across all nodes
+    \item Known to all tasks across all nodes.
     \item Unique to all active jobs of that user.
 \end{itemize}
 
 The YARN "application ID" was used as the default unique ID.
 On a single-query MapReduce job, this is unique to the application
 for the life of the cluster, being composed of the tuple of
-\em{(YARN-cluster-launch-timestamp, application-launch-count)}.
+\emph{(YARN-cluster-launch-timestamp, application-launch-count)}.
 
-In Apache Spark applications, being long-lived, this jobId was not unique.
+In Apache Spark applications, being long-lived, this job Id was not unique.
 Spark knows this ---and provides two forms of mitigation
 \begin{itemize}
     \item A unique UUID set in the configuration option \texttt{spark.sql.sources.writeJobUUID}.
@@ -2975,31 +2981,40 @@ time meant that the \texttt{spark.sql.sources.writeJobUUID} was removed.
 This did not surface as a problem, because of the fallback to the jobID.
 Or at least: it did not surface as a problem during testing.
 In production use, however, the fact that two jobs started by the same user
-second would have the same jobID, hence use the staging directory,
+second would have the same job ID, hence use the staging directory,
 did eventually surface.
 
 Once identified, this was addressed as follows
 \begin{itemize}
-    \item Spark added a random long value to the timestamp, reducing the probability of a collision.
-    \item The removed option was reinstated in Spark.
-    \item The committer code was reviewed to make sure all paths would use the \texttt{spark.sql.sources.writeJobUUID} option if supplied.
-    \item A lot more logging about the origin of the unique ID was implemented, as well as control over the fallback process.
+    \item SPARK-33402. Spark added a random long value to the timestamp, reducing the probability of a collision\ \cite{SPARK-33402}].
+    \item SPARK-33402. The removed option was reinstated in Spark\ \cite{SPARK-33230}.
+    \item HADOOP-17318. The hadoop-side code added the option to autogenerate a unique ID if none was provided\ \cite{HADOOP-17318}.
 \end{itemize}
 
-Fix #1 should suffice;
+The spark changes are sufficient;
 the changes in the S3A committers ensure that even on spark releases without the fix there would be no conflict.
 Because different open source projects release on different cycles, having fixes
 in both projects ensures that anyone using the artifacts of the next release of either
 project gets a fixed committer.
 
-\subsubsection{Lack of reported progress on the magic committer}
+Once this problem surfaced in production, it surfaced in multiple independent
+jobs, run by different organisations.
+Either it had been occurring ---but nobody noticed---, or changes in spark or hardware performance
+meant that multiple jobs were being scheduled in the same second, whereas previously they were not.
+
+Whatever the cause for this change, it highlights that when a key assumption of one piece of code
+```the Job ID is unique'' is not met, things can go wrong.
+
+
+\subsubsection{HADOOP-17414. Magic committer files don't have the count of bytes written collected}
 
 Spark reports progress of a job in terms of bytes written ---this number is determined by measuring the length of the files which task attempt wrote to.
 
-The Magic committer's file output size isn't visible until job commit -and will be on a different path.
+The Magic committer's file output size isn't visible until job commit.
 Spark was simply measuring the zero-byte marker files, so reporting 0 bytes of progress.
 
 The solution here again spanned projects: using HTTP object headers as a back-channel between the committer and the spark reporter.
+\ \cite{HADOOP-17414, SPARK-33739}
 
 In Hadoop, the S3A FileSystem client was extended to return all the HTTP headers of an object through the \texttt{getXAttr(Path, String)} API call.
 The Magic committer was enhanced to add the count of bytes uploaded as an HTTP header attached to the marker file.
