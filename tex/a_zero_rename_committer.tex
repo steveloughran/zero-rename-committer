@@ -2863,7 +2863,26 @@ What problems actually surfaced in production?
 
 It's interesting to reflect on these as they show where
 the trouble rises.
-Scale and Concurrency are the recurrent themes.
+
+\subsubsection{HADOOP-17258. MagicS3GuardCommitter fails with `pendingset` already exists}
+
+
+HADOOP-17258 is the sole issue which can be considered a failure in the commit \emph{algorithm};
+the remainder are all merely implementation issues\ \cite{HADOOP-17258}.
+
+The Magic Committer's task commit operation was written so as
+a task attempt would fail if the manifest file for that specific task already existed.
+While this ensures that the second task attempt would identify and report when a previous
+task had attempt had already successfully committed its work, by reporting a failure
+to the spark driver, this second task was considered to have failed.
+Spark could recover from this by scheduling another attempt, except, of course,
+that would fail too for the same reason.
+
+The fix: overwrite the manifest for that task ID, if already present.
+This means that the last task attempt to write a manifest is always the one
+whose output is promoted to the job, not the first.
+This mimics the behavior of the v1 commit algorithm, wherein the destination directory
+of a task is deleted before a task attempt renames its attempt directory to that path.
 
 \subsection{Scale}
 \label{subsec:scale}
