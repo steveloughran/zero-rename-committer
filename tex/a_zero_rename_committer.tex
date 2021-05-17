@@ -1,4 +1,4 @@
-\documentclass[format=acmsmall, screen=true, review=false]{acmart}
+\documentclass[format=acmsmall, screen=true, nonacm, timestamp, review=false]{acmart}
 
 %     _      _____                    ____
 %    / \    |__  /___ _ __ ___       |  _ \ ___ _ __   __ _ _ __ ___   ___
@@ -15,7 +15,7 @@
 %\usepackage{babel}
 \usepackage{graphicx}
 \usepackage{color}
-\usepackage{cite}
+%\usepackage{cite}
 %\usepackage{algorithmic}
 %\usepackage{algorithmicx}
 \usepackage[ruled,vlined,boxed]{algorithm2e}
@@ -41,20 +41,23 @@
 % ========================================================================
 
 
-\title{ A Zero-Rename Committer}
+\title{A Zero-Rename Committer}
 
 
 \subtitle{Object-storage as a Destination for Apache Hadoop and Spark}
-% Yes, this titling is broken
-\author{
-  Loughran, Steve
-\and
-  Blue, Ryan
-\and
-  Radia, Sanjay
-\and
-  Demoor, Thomas
-}
+
+\author{Steve Loughran}
+\orcid{0000-0003-1856-0076}
+\affiliation{Cloudera}
+\email{stevel@apache.org}
+\author{Ryan Blue}
+\affiliation{Netflix}
+\author{Sanjay Radia}
+\affiliation{Cloudera}
+\author{Thomas, Demoor}
+\affiliation{Western Digital}
+
+
 %\author{
 %  Loughran, Steve
 %  \texttt{stevel@apache.org}
@@ -69,14 +72,13 @@
 %  \texttt{thomas.demoor@wdc.com}
 %}
 
-\date{December 2017}
+\date{May 2021}
 
 % ========================================================================
 
 \begin{document}
 
 
-\maketitle
 
 % ========================================================================
 
@@ -114,22 +116,22 @@ with Hadoop MapReduce and Spark.
 
 The requirements are
 
-\begin{labeling}{continuity of correctness}
-  \item [complete]    the output includes the work of all successful tasks.
-  \item [exclusive]   the output of unsuccessful tasks is not present.
-  \item [concurrent]  multiple tasks can be committed in parallel.
-  \item [abortable]   jobs and tasks may be aborted, after which their output is not visible.
-  \item [continuity of correctness] once a job is committed, the output
-  of any failed, aborted, or unsuccessful task must not appear at some point in the future.
-\end{labeling}
+%\begin{labeling}{continuity of correctness}
+%  \item [complete]    the output includes the work of all successful tasks.
+%  \item [exclusive]   the output of unsuccessful tasks is not present.
+%  \item [concurrent]  multiple tasks can be committed in parallel.
+%  \item [abortable]   jobs and tasks may be aborted, after which their output is not visible.
+%  \item [continuity of correctness] once a job is committed, the output
+%  of any failed, aborted, or unsuccessful task must not appear at some point in the future.
+%\end{labeling}
 
 
 
 As well as demonstrating that our new committers meet these requirements,
 we show that one of the committers which ships with Hadoop.
-Evaluating other object-store-specific committers, IBM's Stocator\ \cite{Stocator}
+Evaluating other object-store-specific committers, IBM's Stocator
 meets the requirements, while Amazon's EMRFS S3-optimized Committer does not
-appear to do so \ \cite{AWS-EMR-committer}.
+appear to do so.
 Equally notably, one of the committers which ships in Hadoop and is broadly used,
 ``The V2 committer'' does not meet these correctness criteria eiher.
 In both the EMR and Hadoop V2 committers, tasks publish their output directly
@@ -145,6 +147,8 @@ The application could then use that information to react to a failure
 in a stricter way, such as failing the job, or restarting it entirely.
 
 \end{abstract}
+
+\maketitle
 
 % ========================================================================
 
@@ -2132,15 +2136,18 @@ This definition of correctness omits some constraints:
   until the job is committed.
   Rationale: It is the final state of the job which matters, not intermediate states.
 
-  \item That task commit operation is atomic.
-  Rationale: The v2 commit algorithm does not meet this requirement.
-
   \item The job commit operation is atomic.
   Rationale: The v1 commit algorithm does not meet this requirement.
 
   \item Concurrent jobs writing to the same destination will succeed and
   produce output equivalent to a serialized commit of the the jobs.
   Rationale: none of the original commit algorithm offers such guarantees.
+
+  \item If two tasks create files with the same name, the choice of which
+  task's output is visible in the output is undefined.
+  Rationale: nothing checks for this situation. The committers expect different
+  tasks to create files with different names.
+
 \end{itemize}
 
 The implication of not requiring these constraints is that the higher-level
@@ -2211,10 +2218,8 @@ or at least optimistic\ \cite{Bermbach:2014:BEC:2624303.2624662}.
 This is harder to demonstrate, and depends on consistent directory
 listings of the object stores, that is: all files created under a path
 in the object store are visible to the LIST operation.
-For Amazon S3, this requires a consistency layer, such as S3mper or S3Guard
-\ \cite{S3mper,HADOOP-13345}.
-Implementations of the S3 Store API which offer consistent listings are not
-at risk.
+For Amazon S3, until it was consistent, this required a consistency layer,
+such as S3mper or S3Guard\ \cite{S3mper,HADOOP-13345}.
 
 All task attempt output is written to the object store, to the final (calculated)
 destination.
@@ -2290,6 +2295,7 @@ This was done through testing:
   \item Single-host integration tests of Spark integration, tests derived from Spark's own SQL test suites.
   \item Large scale integration tests in virtual test clusters.
   \item Peer review.
+  \item Problems reported in production.
 \end{enumerate}
 
 To aid in demonstrating resilience to metadata inconsistency
@@ -2980,7 +2986,8 @@ Once identified, this was addressed as follows
     \item A lot more logging about the origin of the unique ID was implemented, as well as control over the fallback process.
 \end{itemize}
 
-Fix #1 should suffice; the changes in the S3A committers ensure that even on spark releases without the fix there would be no conflict.
+Fix #1 should suffice;
+the changes in the S3A committers ensure that even on spark releases without the fix there would be no conflict.
 Because different open source projects release on different cycles, having fixes
 in both projects ensures that anyone using the artifacts of the next release of either
 project gets a fixed committer.
