@@ -2061,28 +2061,28 @@ manifesting of multipart uploads.
 Do the new algorithms actually \emph{work}?
 
 
-\subsubsection{Defining Correctness of Committed work}
+\subsection{Defining Correctness of Committed work}
 
 First, a definition of correct behavior must be defined.
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Completeness of job output.}
   After a successful invocation of \texttt{commitJob()},
   the destination directory tree will contain all files written under the output directory
   of all task attempts which successfully returned from an invocation of \texttt{commitTask()}.
   The contents of these files will contain exactly the data written by the user code.
   \emph{``You get what was committed''}
-\end{paragraph}
+%\end{paragraph}
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Exclusivity of output.}
   After a successful invocation of \texttt{commitJob()},
   the destination directory tree must only contain the output of successfully
   committed tasks.
   \emph{``And not what wasn't''}.
-\end{paragraph}
+%\end{paragraph}
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Consistency of the commit.}
   The task or job must be able to reliably commit the work, even in the presence
   of inconsistent listings.
@@ -2091,32 +2091,32 @@ First, a definition of correct behavior must be defined.
   Consistency with subsequent queries in a workflow is encouraged, else a ``sufficient''
   delay is needed for the listings to become consistent.
   \emph{``Addresses store inconsistencies, somehow''}
-\end{paragraph}
+%\end{paragraph}
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Concurrent.}
   Multiple tasks in the same job must be able to commit concurrently.
   A job must be able to commit its work while other jobs are committing
   their work \emph{to different destinations in the store}.
-\end{paragraph}
+%\end{paragraph}
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Ability to abort.}
   If a job attempt is aborted before \texttt{commitJob()}, is invoked, and
   \texttt{cleanupJob()} called, then the output of the attempt will not appear in the
   destination directory at any point in the future.
   \emph{``An aborted/cleaned up job no longer exists''}
-\end{paragraph}
+%\end{paragraph}
 
 
-\begin{paragraph}
+%\begin{paragraph}
   \textbf{Continuity of correctness.}
   After a job has been successfully committed, no outstanding task may promote
   output into the destination directory.
   That is: if a task attempt has not ``failed'' mid-commit, merely proceeded at a slow rate,
   its output will not contaminate the directory of the already-successful job.
   \emph{``A dead task attempt stays dead''}
-\end{paragraph}
+%\end{paragraph}
 
 
 The \emph{continuity-of-correctness} requirement excludes that of a failed job.
@@ -2178,7 +2178,7 @@ strongly for that correctness proof.
 In the absence of proofs,
 here are our informal assertions about the correctness of the two algorithms.
 
-\subsubsection{Correctness of the Staging Committer}
+\subsection{Correctness of the Staging Committer}
 
 All task attempt output is written to the local filesystem;
 it is implicitly not in the destination object store until task commit.
@@ -2216,7 +2216,7 @@ or at least optimistic\ \cite{Bermbach:2014:BEC:2624303.2624662}.
 
 
 
-\subsubsection{Correctness of the Magic Committer}
+\subsection{Correctness of the Magic Committer}
 
 This is harder to demonstrate, and depends on consistent directory
 listings of the object stores, that is: all files created under a path
@@ -2599,16 +2599,18 @@ Stocator's task commit operation becomes a no-op, thus trivially repeatable.
 Job commit is a listing of the output and generation of the manifest;
 as the manifest PUT is atomic, the job commit itself is atomic.
 
-
-What is critical for Stocator is that the output of all failed tasks
-is cleaned up, \TODO \emph{WHERE?}.
-This cannot be guaranteed in the failure case of: partitioned task attempt
-continues to execute and write new files.
-When that task attempt attempts to commit, it will fail to be granted permission,
-and presumably clean up.
-\TODO: verify commit $\rightarrow$ fail triggers cleanup
-Before that commit and cleanup phase, the destination directory will contain
-data from the ongoing, uncommitted task.
+% Commented out as I don't know the details and don't want to be seen as
+% cricising the algorithm from a position of ignorance.
+%
+% %What is critical for Stocator is that the output of all failed tasks
+%is cleaned up, \TODO \emph{WHERE?}.
+%This cannot be guaranteed in the failure case of: partitioned task attempt
+%continues to execute and write new files.
+%When that task attempt attempts to commit, it will fail to be granted permission,
+%and presumably clean up.
+%\TODO: verify commit $\rightarrow$ fail triggers cleanup
+%Before that commit and cleanup phase, the destination directory will contain
+%data from the ongoing, uncommitted task.
 
 Compared to the other designs, this is unique in that it retrofits an
 object-store-optimized committer under the MapReduce V1 and V2 commit algorithms.
@@ -2628,7 +2630,8 @@ which ensures that output is not actually manifest until
 the final job is committed.
 Thus it provides the standard semantics of task and job commit: no data is
 visible until the job is committed, and partitioned task attempts will
-never make changes to the visible file set.
+never make changes to the visible file set\footnote{Do however see SPARK-33739 for where user expectations were not met}.
+
 
 \subsection{Amazon's EMRFS S3-optimized Committer}
 \label{subsec:emrfs-committer}
@@ -2655,7 +2658,7 @@ The documentation contains three assertions:-
 Without the source being available to examine, we can only infer aspects
 of its behaviour from the documentation and blog post.
 
-The 2019 article is the most informative, as are some hints in.
+The 2019 article is the most informative,.
 
 \begin{itemize}
   \item Data is uploaded as multipart uploads, which are not made visible at the time of writing.
@@ -2842,32 +2845,31 @@ are opportunities to better specify the protocol and APIs, and review
 their use.
 We hope this document is a start, while warning readers that it is non-normative.
 
-% ========================================================================
-
-\section*{Acknowledgements}
-\label{sec:acknowledgements}
-
-We are grateful for the contributions of all reviewers and testers, especially
-Aaron Fabbri and Ewan Higgs.
-We must also highlight the contributions of our QE teams: it is through
-their work that this work is ready for others to use.
 
 % ========================================================================
 
 
-\section{Appendix: What happened in Production?}
-\label{sec:appendix}
+\section{Yes, but did it work?}
+\label{sec:production}
 
 
 What problems actually surfaced in production?
 
-It's interesting to reflect on these as they show where
-the trouble rises.
+As of May 2021, here are the problems which surfaced
+and required repair, be they minor (HADOOP-17112) or
+significant and application spanning (HADOOP-17414, SPARK-33402).
+
+Anyone else implementing a committer should take note of
+these issues and makes sure their code does not encounter
+the same problems.
+
+\subsection{Algorithm}
+\label{subsec:algorithm}
 
 \subsubsection{HADOOP-17258. MagicS3GuardCommitter fails with `pendingset` already exists}
 
 
-HADOOP-17258 is the sole issue which can be considered a failure in the commit \emph{algorithm};
+HADOOP-17258 can be considered a failure in the commit \emph{algorithm};
 the remainder are all merely implementation issues\ \cite{HADOOP-17258}.
 
 The Magic Committer's task commit operation was written so as
@@ -2884,15 +2886,22 @@ whose output is promoted to the job, not the first.
 This mimics the behavior of the v1 commit algorithm, wherein the destination directory
 of a task is deleted before a task attempt renames its attempt directory to that path.
 
-\subsection{Scale}
+There is a consequence: if task attempt TA1 partitioned after being instructed
+to commit its output, and after a pause it did commit its data, it's manifest
+may be the one which the final job committer will load and commit.
+That is: the output of a single task attempt will be committed, it just
+isn't the one which the spark driver thinks it is.
+Again, the existing V1 algorithm has this same behavior.
+
+\subsection{HADOOP-16570. S3A committers encounter scale issues}
 \label{subsec:scale}
 
-\subsubsection{Out of memory if too much work is done}
 
 Scale issues surfaced in the 10TB TPC-DS benchmarks during dataset generation
-for performance testing.
+for performance testing\ \cite{HADOOP-16570}.
 
-HADOOP-16570. S3A committers encounter scale issues
+\subsubsection{Out of Memory Exceptions}
+
 The job commit process loaded the data from all completed tasks into memory,
 validated them, then committed the uploads in parallel via a thread pool.
 
@@ -2906,33 +2915,33 @@ This means that the validation phase
 (are all the .pendingset files parseable? valid?) is no longer performed
 prior to job commit unless explicitly requested.
 
-Note: this surfaced during large-scale Terasort benchmarking.
-It has never surfaced \emph{in the wild}.
+Note: this issue never surfaced \emph{in the wild}, which can be
+viewed as evidence that terasorting, while a good stress test,
+bears very little resembles to real-world use.
 
-\subsubsection{Thread Leakage}
-
-HADOOP-16570. S3A committers leak threads/raises OOM on job/task commit at scale\ \cite{HADOOP-16570}.
+\subsubsection{S3A committers leak threads on job/task commit at scale}
 
 The thread pool created in each committer for parallel execution wasn't being
 cleaned up, and eventually long-lived spark processes would run out of memory,
 usually at a random point in job commit.
 
 Fixing this was tricky as there's no explicit method on committers which
-execution engines invoke to say "we are done".
-The straightforward fix triggered a shutdown in the job and task completion
-operations, with the pool created on-demand in the commit phases.
+execution engines invoke to say "we are done", such as a \texttt{close()} method.
+
+The ``straightforward fix'' was to shutdown in in the job and task completion
+operations, with the pool created on-demand in the commit methods.
 
 This ``straightforward fix'' created a race condition between pool shutdown
-and work scheduling, which led to HADOOP-16798: job commit failure in S3A
-MR magic committer test\ \cite{HADOOP-16570}.
-Consult the JIRA for the details.
+and work scheduling, which led to \emph{HADOOP-16798: job commit failure in S3A
+MR magic committer test}\ \cite{HADOOP-16798}.
+Consult that JIRA for the details.
 
 
 
-\subsubsection{Progress callbacks}
-\label{subsec:progress-callbacks}
+\subsubsection{HADOOP-15961: S3A committers: make sure there's regular progress()}
+\label{subsec:HADOOP-15961}
 
-HADOOP-15961: S3A committers: make sure there's regular progress()
+
 
 The staging committers were not sending progress heartbeat callbacks
 to the execution engine during their upload of files.
@@ -2968,13 +2977,13 @@ to delete incomplete uploads after a number of days.
 
 \subsubsection{Concurrent jobs and duplicate JobIDs}
 
-The Staging committer was always designed for parallel execution,
+The staging committer was always designed for parallel execution,
 with tunable conflict resolution policies to allow the caller to
 declare what to do if another job had written data to the same
 destination tree.
 
 Critical for this committer is the staging directory on the cluster filesystem.
-This must be
+This must be:
 
 \begin{itemize}
     \item Accessible on all nodes executing work.
@@ -2982,7 +2991,8 @@ This must be
     \item Unique to all active jobs of that user.
 \end{itemize}
 
-The YARN "application ID" was used as the default unique ID.
+The YARN "application ID" was used as the default unique ID, as it is in the original
+FileOutputCommitter.
 On a single-query MapReduce job, this is unique to the application
 for the life of the cluster, being composed of the tuple of
 \emph{(YARN-cluster-launch-timestamp, application-launch-count)}.
@@ -2995,9 +3005,9 @@ Spark knows this ---and provides two forms of mitigation
 \end{itemize}
 
 Unfortunately, this turned out not to work.
-Changes in Spark's code over
-time meant that the \texttt{spark.sql.sources.writeJobUUID} was removed.
-This did not surface as a problem, because of the fallback to the jobID.
+Changes in Spark's code over time meant that the
+\texttt{spark.sql.sources.writeJobUUID} setting was removed.
+This did not surface as a problem, because of the fallback to the YARN jobID.
 Or at least: it did not surface as a problem during testing.
 In production use, however, the fact that two jobs started by the same user
 second would have the same job ID, hence use the staging directory,
@@ -3010,7 +3020,7 @@ Once identified, this was addressed as follows
     \item HADOOP-17318. The hadoop-side code added the option to autogenerate a unique ID if none was provided\ \cite{HADOOP-17318}.
 \end{itemize}
 
-The spark changes are sufficient;
+The Spark changes are sufficient;
 the changes in the S3A committers ensure that even on spark releases without the fix there would be no conflict.
 Because different open source projects release on different cycles, having fixes
 in both projects ensures that anyone using the artifacts of the next release of either
@@ -3023,7 +3033,6 @@ meant that multiple jobs were being scheduled in the same second, whereas previo
 
 Whatever the cause for this change, it highlights that when a key assumption of one piece of code
 ```the Job ID is unique'' is not met, things can go wrong.
-
 
 \subsubsection{HADOOP-17414. Magic committer files don't have the count of bytes written collected}
 
@@ -3041,6 +3050,40 @@ And in Spark, the tracking code in \texttt{BasicWriteTracker} extended to query 
 
 If the header was found and could be parsed to a positive long integer, it was reported as the byte count.
 As a result, the progress reporting now reports on the bytes uploaded, rather than the bytes currently visible in the store.
+
+\subsubsection{HADOOP-17112. whitespace not allowed in paths when saving files to s3a via committer}
+
+The marshalling of the Hadoop `Path` datatype of pending uploads through the JSON manifest
+files was not correctly encoding spaces in paths. As a result, job writing to directory
+trees with spaces in them would fail in job commit\ \cite{HADOOP-17112}.
+
+While trivial to fix, this is notable as a latent bug which was not picked
+up in the S3A committer tests, it's integration tests in spark, and the full
+functional tests in real clusters.
+Why not?
+All these tests contained the same assumption ``Paths do not have spaces''.
+
+The authors of these tests were, like the author of the manifest files, wrong.
+
+This is interesting then, not as an example of a major bug, but showing how
+preconceptions common to multiple teams of developers mean that bugs
+can slip through an extended QE process.
+
+At the very least, this argues for more randomness in the generation
+of paths for tables, SQL query strings and even ordering of
+operations in test suites, so as to explore the ``deployment space''
+more thoroughly.
+As with all open source projects: \emph{we welcome contributions in this area}.
+
+% ========================================================================
+
+\section*{Acknowledgements}
+\label{sec:acknowledgements}
+
+We are grateful for the contributions of all reviewers and testers, especially
+Aaron Fabbri and Ewan Higgs.
+We must also highlight the contributions of our QE teams: it is through
+their work that this work is ready for others to use.
 
 % ========================================================================
 
