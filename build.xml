@@ -1,0 +1,93 @@
+<project name="latex" default="init" basedir=".">
+  <description>latex build of file in tex/</description>
+
+  <!-- foundational macro to fail if a property is unset; echo the valid -->
+
+
+    <macrodef name="show">
+      <attribute name="name" />
+      <sequential>
+        <echo>@{name}=${@{name}}</echo>
+      </sequential>
+    </macrodef>
+
+    <macrodef name="require">
+      <attribute name="p" />
+      <sequential>
+        <fail unless="@{p}" message="unset property @{p}" />
+        <show name="@{p}" />
+      </sequential>
+    </macrodef>
+
+    <!--  set: set a property and print its value-->
+    <macrodef name="set">
+      <attribute name="name" />
+      <attribute name="value" />
+      <sequential>
+        <property name="@{name}" value="@{value}" />
+        <show name="@{name}" />
+      </sequential>
+    </macrodef>
+
+    <!--  set: set a property to a location and print its value-->
+    <macrodef name="setpath">
+      <attribute name="name" />
+      <attribute name="location" />
+      <sequential>
+        <property name="@{name}" location="@{location}" />
+        <show name="@{name}" />
+      </sequential>
+    </macrodef>
+
+  <property file="project.properties"/>
+
+  <set name="source"
+    value="a_zero_rename_committer" />
+
+  <set name="source.tex"
+    value="${source}.tex" />
+
+  <set name="source.aux"
+    value="${source}.aux" />
+
+  <!--
+   Validate the settings, build the ant
+   properties, define macros etc.
+  -->
+
+  <target name="init" description="initialize">
+    <presetdef name="x">
+      <exec failonerror="true"/>
+    </presetdef>
+
+    <presetdef name="latex">
+      <x executable="pdflatex"/>
+    </presetdef>
+
+    <presetdef name="bibtex">
+      <x executable="bibtex"/>
+    </presetdef>
+  </target>
+
+  <target name="latex" depends="init">
+    <latex dir="tex">
+      <arg value="${source.tex}"/>
+    </latex>
+  </target>
+
+  <target name="bibtex" depends="init">
+    <bibtex dir="tex">
+      <arg value="${source}.aux"/>
+    </bibtex>
+  </target>
+
+
+  <target name="clean" depends="init">
+    <delete>
+      <fileset dir="tex"
+        includes="*.pdf,*.dvi,*.bbl,*.aux,*.out,*.blg,*.log,*.xcp"/>
+    </delete>
+  </target>
+
+
+</project>

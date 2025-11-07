@@ -10,7 +10,7 @@
 *.fot
 *.cb
 *.cb2
-
+.idea/
 ## Intermediate documents:
 *.dvi
 *-converted-to.*

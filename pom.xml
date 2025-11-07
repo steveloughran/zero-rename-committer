@@ -21,33 +21,49 @@
   <artifactId>s3a-committers</artifactId>
   <version>1.0-SNAPSHOT</version>
   <description>Maven to build the PDF/DVIs of the project</description>
-  <name>S3A Committers</name>
+  <properties>
+    <maven-latex-plugin.version>2.0</maven-latex-plugin.version>
+  </properties>
+  <name>A Zero Rename Committer</name>
   <packaging>jar</packaging>
 
+  <!--
+  https://github.com/Reissner/latex-maven-plugin
+  -->
   <pluginRepositories>
     <pluginRepository>
-      <id>maven-latex-plugin-repo</id>
-      <url>http://akquinet.github.com/maven-latex-plugin/maven2/</url>
+      <id>publicRepoAtSimuline</id>
+      <name>repo at simuline</name>
+      <url>https://www.simuline.eu/public_html/RepositoryMaven</url>
       <releases>
         <enabled>true</enabled>
       </releases>
     </pluginRepository>
   </pluginRepositories>
+  <repositories>
+    <repository>
+      <id>publicRepoAtSimuline</id>
+      <name>repo at simuline</name>
+      <url>https://www.simuline.eu/public_html/RepositoryMaven</url>
+    </repository>
+  </repositories>
+<!--
 
   <dependencies>
     <dependency>
-      <groupId>de.akquinet.jbosscc.latex</groupId>
-      <artifactId>maven-latex-plugin</artifactId>
-      <version>1.2</version>
+      <groupId>eu.simuline.m2latex</groupId>
+      <artifactId>latex-maven-plugin</artifactId>
+      <version>${maven-latex-plugin.version}</version>
     </dependency>
   </dependencies>
+-->
 
   <build>
     <plugins>
       <plugin>
-        <groupId>de.akquinet.maven</groupId>
-        <artifactId>maven-latex-plugin</artifactId>
-        <version>1.1</version>
+        <groupId>eu.simuline.m2latex</groupId>
+        <artifactId>latex-maven-plugin</artifactId>
+        <version>${maven-latex-plugin.version}</version>
         <inherited>false</inherited>
         <executions>
           <execution>
