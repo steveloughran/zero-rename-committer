@@ -134,7 +134,7 @@ In order to evaluate the correctness of our work, we provide a definition
 of \emph{Correctness} ---the requirements of a committer for safe integration
 with Hadoop MapReduce and Spark.
 
-The requirements are
+%The requirements are
 
 %\begin{labeling}{continuity of correctness}
 %  \item [complete]    the output includes the work of all successful tasks.
@@ -469,7 +469,7 @@ important on long lived jobs ---those which last many hours.
 
 \subsubsection{Bad Records}
 
-To avoid an entire task, and hence job, failing due to a single unprocesseable record,
+To avoid an entire task, and hence job, failing due to a single unprocessable record,
 task attempts may skip records whose processing raises an exception.
 If the number of skipped records in a task attempt is below some threshold
 threshold, these records will not result in a task attempt reporting itself as
@@ -493,7 +493,7 @@ atomic task commit and the ability to explicitly recover the output generated
 by the committed tasks of a failed job attempt.
 
 The ``v2'' algorithm was added in 2015, as its predecessor was found
-to have scalablity problems for jobs with tens of thousands of files
+to have scalability problems for jobs with tens of thousands of files
 \ \cite{MAPREDUCE-4815}.
 While the v2 algorithm can deliver better performance, it comes at the price of
 reduced isolation of output.
@@ -538,8 +538,9 @@ The task commit operation is no longer atomic, changing failure modes.
 \label{subsec:common-variables}
 
 
-\begin{table}
+\begin{table*}[t]
   \caption{Variables used in the algorithms}
+  \centering
   \begin{tabular}{ l l l }
     \hline
     \textbf{name} & \textbf{meaning} \\
@@ -556,7 +557,7 @@ The task commit operation is no longer atomic, changing failure modes.
     \hline
   \end{tabular}
 \label{tab:variables}
-\end{table}
+\end{table*}
 
 For a Job Attempt $jobAttemptId$ to be successful, all parts of the dataset
 must be processed in one or more successful tasks.
@@ -642,8 +643,8 @@ directory \texttt{\_temporary} of the output directory
 \label{alg:FileOutputCommitter.setupJob}
 \end{procedure}
 
-Note Hadoop has a convention that all paths starting with ``_'' are not considered
-``visible'';
+Because Hadoop has a convention that all paths starting with \textunderscore are not considered
+visible; 
 everything under this directory is excluded from normal
 listings of the destination path.
 Creating all intermediate files in a subdirectory of the destination
@@ -1039,7 +1040,7 @@ this window would be nearly completely eliminated.
 
 Apache Spark's execution model is significantly different from
 that of Hadoop.
-Rather than dedicatinga single process to executing a single operation
+Rather than dedicating a single process to executing a single operation
 across a subset of the source data, Spark creates a set of \emph{Executors},
 each of which can execute task attempts across a number of threads.
 As a result, a single executor may be executing many task attempts
@@ -1093,8 +1094,8 @@ in \texttt{abortTask()} being invoked.
 Once a task attempt has been granted permission to commit, then no other
 attempt will be granted unless the first attempt is reported as having failed.
 
-\TODO: \texttt{OutputCommitCoordinator} reacts to task events from the scheduler, but
-does that cover executor failure?
+%\TODO: \texttt{OutputCommitCoordinator} reacts to task events from the scheduler, but
+% does that cover executor failure?
 
 Spark makes no attempt to recover from a failed Job Manager;
 its mechanism for recovering from a failed job is ``rerun the entire query''.
@@ -1318,7 +1319,7 @@ each, which makes its duration a function the number of files and total amount o
 
 These are the tangible performance issues, the ones which are most visible
 to users.
-However it is the fact that the atomicity behaviors of a POSIX filesystem
+However it is the fact that the atomicity behaviours of a POSIX filesystem
 are not provided which are most dangerous.
 
 The \texttt{rename()} call is no longer atomic: two clients may start renaming
@@ -1772,7 +1773,7 @@ Accordingly, whenever a directory with the name \texttt{__base} is
 encountered, it declares that its contents must be mapped relative to the destination
 directory.
 
-\begin{table}
+\begin{table*}
   \caption{Example magic path mappings}
   \begin{tabular}{ l l }
     \hline
@@ -1787,7 +1788,7 @@ directory.
     \hline
   \end{tabular}
 \label{tab:magic-paths}
-\end{table}
+\end{table*}
 
 
 When the a magic output stream is closed, the manifest of the single upload is saved
@@ -2020,7 +2021,7 @@ We chose not to do this
   \item Our changes could unintentionally break the correctness of the existing committer.
   \item Subclasses of the existing committer may have been implemented to extend
   the protocol, perhaps by summarizing the output, writing extra files, etc.
-  Changing the superclass behavior to not create output files until job commit
+  Changing the superclass behaviour to not create output files until job commit
   ran the risk of breaking all this code.
 \end{enumerate}
 
@@ -2063,7 +2064,7 @@ Do the new algorithms actually \emph{work}?
 
 \subsection{Defining Correctness of Committed work}
 
-First, a definition of correct behavior must be defined.
+First, a definition of correct behaviour must be defined.
 
 %\begin{paragraph}
   \textbf{Completeness of job output.}
@@ -2167,7 +2168,7 @@ commit operations.
 
 
 We do not attempt provide a formal proof of the correctness of the algorithms.
-A TLA+ specification of the behavior of a consistent object store was created
+A TLA+ specification of the behaviour of a consistent object store was created
 during the process, however we have not completed that with any
 algorithm specifications\ \cite{s3-tla}.
 Modelling an eventually consistent somewhat is ``somewhat challenging''
@@ -2310,7 +2311,7 @@ this was used in integration testing.
 The large-scale integration tests have not, at the time of writing, highlighted any problems;
 the simpler test suites were co-developed with the code, and exposing issues and
 being expanded as new issues were discovered.
-One bug the integration tests did show that our committers' cleanup code was
+One bug the integration tests did show that our committers' clean-up code was
 over-aggressive in listing and cancelling all outstanding uploads pending
 on the destination directory.
 
@@ -2352,8 +2353,8 @@ storage system.
 The performance of the new committers is not visible with small amounts
 of data, as the number of HTTP requests is the dominant factor.
 As the amount of data increases, the elimination of the copy operations
-delivers a significant speedup to the new committers.
-With a measured in-S3 copy time of ~6-10MB/s, the saving is 1 second per 10 MB
+delivers a significant speed-up to the new committers.
+With a measured in-S3 copy time of approximately 6-10MB/s, the saving is 1 second per 10 MB
 of data committed.
 
 Comparing the staging and magic committers is interesting.
@@ -2911,8 +2912,7 @@ number of files, each with a sufficiently long enough list of blocks
 
 Fix: incremental load-and-commit of each task's files.
 
-This means that the validation phase
-(are all the .pendingset files parseable? valid?) is no longer performed
+This means that the validation phase is no longer performed
 prior to job commit unless explicitly requested.
 
 Note: this issue never surfaced \emph{in the wild}, which can be
@@ -2964,7 +2964,7 @@ The Magic committer cleaned up all pending uploads,
 operating on the same assumption of the classic Hadoop FileOutputCommitter
 \emph{only one job can be writing to the same destination directory at a time}.
 Some users chose to run the committer targeting the same destination, which,
-because of that cleanup, meant the second job to commit would fail, as all
+because of that clean-up, meant the second job to commit would fail, as all
 files uploaded before job2 was committed were lost.
 
 Fixing this was straightforward: provide an option to not delete incomplete
@@ -3061,18 +3061,22 @@ While trivial to fix, this is notable as a latent bug which was not picked
 up in the S3A committer tests, it's integration tests in spark, and the full
 functional tests in real clusters.
 Why not?
-All these tests contained the same assumption ``Paths do not have spaces''.
+All these tests contained the same assumption: ``Paths do not have spaces''.
 
-The authors of these tests were, like the author of the manifest files, wrong.
+The authors of these tests were, as was the author of the manifest files, incorrect that this assumption held universally, or alternatively: that their code worked when there were spaces in the paths.
+
+The committers worked through QE tests, beta testing, and most of the production deployments, until eventually
+a deployment was encountered where it didn't
 
 This is interesting then, not as an example of a major bug, but showing how
 preconceptions common to multiple teams of developers mean that bugs
-can slip through an extended QE process.
+can slip through an extended QE process and release process
+
 
 At the very least, this argues for more randomness in the generation
 of paths for tables, SQL query strings and even ordering of
 operations in test suites, so as to explore the ``deployment space''
-more thoroughly.
+more thoroughly, fuzzing not just binary test data, but more aspects of the System Under Test.
 As with all open source projects: \emph{we welcome contributions in this area}.
 
 % ========================================================================
